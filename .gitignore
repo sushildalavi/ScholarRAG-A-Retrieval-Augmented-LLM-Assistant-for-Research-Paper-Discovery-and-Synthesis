@@ -1,4 +1,31 @@
-*
-!.gitignore
-!ScholarRAG/
-ScholarRAG/.env
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Secrets / env
+.env
+*.env
+.env/
+.envrc
+
+# Virtual envs
+venv/
+.venv/
+
+# Caches / data
+.DS_Store
+.cache/
+logs/
+data/cache/
+*.log
+*.db
+*.sqlite
+*.npy
+*.npz
+*.parquet
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
