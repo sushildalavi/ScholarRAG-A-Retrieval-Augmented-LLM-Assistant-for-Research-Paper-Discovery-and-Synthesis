@@ -29,3 +29,6 @@ data/cache/
 # IDE
 .vscode/
 .idea/
+
+# Legacy artifacts
+ScholarRAG/
