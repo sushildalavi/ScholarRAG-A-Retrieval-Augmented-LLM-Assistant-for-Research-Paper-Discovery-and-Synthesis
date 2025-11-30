@@ -23,10 +23,13 @@ def _load_dotenv_if_available() -> None:
     except ImportError:
         return
 
-    # Attempt project-level .env, then default search behaviour.
-    project_env = Path(__file__).resolve().parent / ".env"
-    if project_env.exists():
-        load_dotenv(project_env, override=False)
+    utils_dir = Path(__file__).resolve().parent
+    project_root = utils_dir.parent
+
+    # Attempt repo-level .env first, then utils/.env, then default search behaviour.
+    for candidate in (project_root / ".env", utils_dir / ".env"):
+        if candidate.exists():
+            load_dotenv(candidate, override=False)
     load_dotenv(override=False)
 
 

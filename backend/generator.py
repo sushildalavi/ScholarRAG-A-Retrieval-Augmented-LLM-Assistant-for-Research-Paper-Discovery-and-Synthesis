@@ -22,7 +22,7 @@ def build_contexts(docs: List[Dict]) -> Tuple[str, List[str]]:
     return "\n".join(blocks), keys
 
 
-def synthesize_answer(query: str, docs: List[Dict]) -> str:
+def synthesize_answer(query: str, docs: List[Dict]) -> Dict[str, Dict]:
     contexts, _ = build_contexts(docs)
     prompt = build_user_prompt(query, contexts)
     resp = _client().chat.completions.create(
@@ -33,5 +33,8 @@ def synthesize_answer(query: str, docs: List[Dict]) -> str:
         ],
         temperature=0.3,
     )
-    return resp.choices[0].message.content
-
+    usage = resp.usage.model_dump() if getattr(resp, "usage", None) else {}
+    return {
+        "answer": resp.choices[0].message.content,
+        "usage": usage,
+    }
