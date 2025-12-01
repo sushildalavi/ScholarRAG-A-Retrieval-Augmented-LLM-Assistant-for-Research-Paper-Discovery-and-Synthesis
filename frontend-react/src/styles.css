@@ -1,0 +1,62 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+  background: #f7f8fb;
+  color: #111;
+}
+.layout {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.logo { font-weight: 700; font-size: 20px; }
+.search-bar {
+  flex: 1;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.search-bar input[type="text"], .search-bar input[type="range"] {
+  flex: 1;
+}
+.search-bar input[type="text"] {
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid #dcdfe7;
+}
+.controls { display: flex; gap: 8px; align-items: center; }
+button {
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: none;
+  background: #111c45;
+  color: white;
+  cursor: pointer;
+}
+main { display: grid; grid-template-columns: 320px 1fr; gap: 16px; }
+.card {
+  background: white;
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.05);
+  margin-bottom: 12px;
+}
+.results { display: flex; flex-direction: column; gap: 12px; }
+.meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; color: #555; font-size: 13px; }
+.pill {
+  background: #eef2ff;
+  color: #3344aa;
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+.upload input[type="file"] { width: 100%; }
+.status { margin-top: 8px; font-size: 13px; color: #444; }
+.actions { display: flex; justify-content: flex-end; }
+pre { white-space: pre-wrap; }

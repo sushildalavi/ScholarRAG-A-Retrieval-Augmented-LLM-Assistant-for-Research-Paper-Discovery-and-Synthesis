@@ -13,8 +13,8 @@ try:
 except ImportError:  # pragma: no cover
     OpenAI = None  # type: ignore
 
-EMBED_DIM = 3072  # matches text-embedding-3-large output dim
-EMBED_MODEL = "text-embedding-3-large"
+EMBED_DIM = 1536  # matches text-embedding-3-small (better speed/cost)
+EMBED_MODEL = "text-embedding-3-small"
 
 
 def text_to_hash(text: str) -> str:

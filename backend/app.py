@@ -21,6 +21,7 @@ from backend import memory
 from backend import agents
 from backend import pdf_ingest
 from backend.user_store import get_user_index
+from fastapi.responses import Response
 
 # Initialize FastAPI app
 app = FastAPI(title="ScholarRAG API", version="1.0")
@@ -40,6 +41,12 @@ app.include_router(auth.router)
 app.include_router(memory.router)
 app.include_router(agents.router)
 app.include_router(pdf_ingest.router)
+
+
+@app.get("/favicon.ico")
+def favicon():
+    """Avoid 404 spam from browsers requesting favicon."""
+    return Response(status_code=204)
 
 # ------------------------------
 # Load FAISS index and metadata
@@ -70,7 +77,7 @@ except RuntimeError as err:
     print(f"❌ {err}")
     client = None
 
-EMBED_MODEL = "text-embedding-3-large"
+EMBED_MODEL = "text-embedding-3-small"  # aligned with 1536-dim pgvector schema
 
 def get_embedding(text: str) -> np.ndarray:
     """Generate embedding vector for a query string."""

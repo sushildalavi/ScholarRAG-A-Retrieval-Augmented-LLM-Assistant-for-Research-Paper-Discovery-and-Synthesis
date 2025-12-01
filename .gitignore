@@ -15,9 +15,11 @@ venv/
 
 # Caches / data
 .DS_Store
+.logs/
 .cache/
 logs/
 data/cache/
+storage/
 *.log
 *.db
 *.sqlite
@@ -29,6 +31,11 @@ data/cache/
 # IDE
 .vscode/
 .idea/
+
+# Frontend (Vite/React)
+node_modules/
+frontend-react/node_modules/
+frontend-react/dist/
 
 # Legacy artifacts
 ScholarRAG/

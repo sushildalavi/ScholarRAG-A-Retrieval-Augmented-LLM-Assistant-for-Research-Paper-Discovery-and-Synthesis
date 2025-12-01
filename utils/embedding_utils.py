@@ -11,7 +11,7 @@ from utils.config import get_openai_api_key
 from openai import OpenAI
 
 
-EMBED_MODEL = "text-embedding-3-large"
+EMBED_MODEL = "text-embedding-3-small"  # faster/cheaper, good quality
 EMBED_CACHE_ENABLED = os.getenv("EMBED_CACHE_ENABLED", "1") != "0"
 EMBED_CACHE_PATH = Path(os.getenv("EMBED_CACHE_PATH", "data/embed_cache.sqlite"))
 CHUNK_SIZE = 64
