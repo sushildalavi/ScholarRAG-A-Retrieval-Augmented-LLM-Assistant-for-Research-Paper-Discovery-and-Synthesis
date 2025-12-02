@@ -1,36 +1,43 @@
 import { useState } from 'react';
+import { api } from '../api/client';
 
 type Props = {
-  apiBase: string;
+  onUploaded: () => void;
 };
 
-export function UploadPanel({ apiBase }: Props) {
-  const [file, setFile] = useState<File | null>(null);
-  const [status, setStatus] = useState<string>('');
+export function UploadPanel({ onUploaded }: Props) {
+  const [dragOver, setDragOver] = useState(false);
+  const [status, setStatus] = useState('');
 
-  const onUpload = async () => {
-    if (!file) return;
+  const handleFiles = async (files: FileList | null) => {
+    if (!files || !files.length) return;
+    const file = files[0];
     setStatus('Uploading...');
-    const form = new FormData();
-    form.append('file', file);
-    const res = await fetch(`${apiBase}/documents/upload`, {
-      method: 'POST',
-      body: form,
-    });
-    if (!res.ok) {
-      setStatus('Upload failed');
-      return;
+    try {
+      const res = await api.uploadFile(file);
+      setStatus('Upload complete');
+      onUploaded();
+    } catch (e: any) {
+      setStatus(e?.message || 'Upload failed');
     }
-    const data = await res.json();
-    setStatus(`Uploaded doc #${data.document_id}, chunks: ${data.chunks}`);
   };
 
   return (
-    <div className="card upload">
-      <h3>Upload PDF/Text</h3>
-      <input type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-      <button onClick={onUpload} disabled={!file}>Upload</button>
-      <div className="status">{status}</div>
+    <div className="upload-panel">
+      <div
+        className={`dropzone ${dragOver ? 'drag-over' : ''}`}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
+      >
+        <div className="drop-icon">📄</div>
+        <div className="drop-text">Drag research PDFs here, or <span className="highlight">browse</span>.</div>
+        <input type="file" onChange={(e) => handleFiles(e.target.files)} />
+      </div>
+      <button className="primary-btn" onClick={() => document.querySelector<HTMLInputElement>('.dropzone input')?.click()}>
+        + Upload Source
+      </button>
+      {status && <div className="status-text">{status}</div>}
     </div>
   );
 }

@@ -6,6 +6,7 @@ import faiss
 import json
 import numpy as np
 import time
+import re
 from datetime import datetime
 from pathlib import Path
 from fastapi import Body
@@ -21,7 +22,12 @@ from backend import memory
 from backend import agents
 from backend import pdf_ingest
 from backend.user_store import get_user_index
+from backend import chat
 from fastapi.responses import Response
+from backend.pdf_ingest import search_chunks as search_uploaded_chunks
+from utils.embedding_utils import embed_query, embed_batch_cached
+from utils.logging_utils import setup_file_logger, log_json
+from backend.public_search import public_live_search
 
 # Initialize FastAPI app
 app = FastAPI(title="ScholarRAG API", version="1.0")
@@ -41,12 +47,181 @@ app.include_router(auth.router)
 app.include_router(memory.router)
 app.include_router(agents.router)
 app.include_router(pdf_ingest.router)
+app.include_router(chat.router)
 
 
 @app.get("/favicon.ico")
 def favicon():
     """Avoid 404 spam from browsers requesting favicon."""
     return Response(status_code=204)
+
+
+# ------------------------------
+# Assistant endpoint (RAG + GPT-4o-mini)
+# ------------------------------
+
+
+@app.post("/assistant/answer")
+def assistant_answer(
+    payload: dict = Body(
+        ...,
+        example={
+            "query": "What does the paper really address?",
+            "scope": "uploaded",
+            "doc_id": None,
+            "k": 10,
+        },
+    )
+):
+    """
+    Unified QA endpoint for uploaded docs (chunk RAG) or public papers (FAISS/external).
+    Returns answer plus lightweight citations.
+    """
+    started = time.time()
+    query = payload.get("query") or ""
+    scope = payload.get("scope") or "uploaded"
+    doc_id = payload.get("doc_id")
+    k = int(payload.get("k") or 10)
+    multi_hop = bool(payload.get("multi_hop"))
+
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+
+    def fetch_context(q: str):
+        local_citations = []
+        local_context = []
+        if scope == "uploaded":
+            results = search_uploaded_chunks(q, k=k, doc_id=doc_id)["results"]
+            for r in results:
+                local_citations.append(
+                    {
+                        "title": f"Document {r.get('document_id')}",
+                        "source": "uploaded",
+                        "doc_id": r.get("document_id"),
+                        "chunk_id": r.get("id"),
+                        "page": r.get("page_no"),
+                    }
+                )
+                local_context.append(
+                    f"[doc {r.get('document_id')} chunk {r.get('id')} page {r.get('page_no','?')}] {r.get('text','')}"
+                )
+        else:
+            docs = public_live_search(q, k=min(k, 8))
+            for d in docs:
+                local_citations.append(
+                    {
+                        "title": d.get("title"),
+                        "year": d.get("year"),
+                        "source": d.get("source") or d.get("venue"),
+                        "url": d.get("url") or d.get("doi"),
+                    }
+                )
+                local_context.append(
+                    f"[{d.get('title','')}] {d.get('abstract') or d.get('summary') or ''}"
+                )
+        return local_context, local_citations
+
+    citations = []
+    context_blocks = []
+
+    if multi_hop and (" and " in query or ";" in query or "," in query):
+        subqs = [q.strip() for q in re.split(r"and|;|,", query) if q.strip()]
+        for sq in subqs:
+            ctx, cits = fetch_context(sq)
+            context_blocks.extend(ctx)
+            citations.extend(cits)
+    else:
+        ctx, cits = fetch_context(query)
+        context_blocks.extend(ctx)
+        citations.extend(cits)
+
+    context = "\n\n".join(context_blocks[:k]) if context_blocks else "No context found."
+    prompt = (
+        "You are a research assistant. Use the provided context to answer. "
+        "Respond with a detailed answer (multiple paragraphs) and cite sources inline like [1], [2]. "
+        "If context is weak, say so. Do not invent citations.\n\n"
+        f"Question:\n{query}\n\nContext:\n{context}\n"
+    )
+
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="OpenAI client not configured. Set OPENAI_API_KEY (and install python-dotenv if relying on .env).",
+        )
+
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+        )
+        answer = completion.choices[0].message.content
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"LLM error: {exc}") from exc
+
+    trust = round(min(1.0, len(citations) / max(1, k)), 3)
+    latency_ms = int((time.time() - started) * 1000)
+
+    log_json(
+        REQUEST_LOG,
+        {
+            "ts": time.time(),
+            "event": "assistant_answer",
+            "query": query,
+            "scope": scope,
+            "doc_id": doc_id,
+            "k": k,
+            "multi_hop": multi_hop,
+            "context_count": len(context_blocks),
+            "citations": len(citations),
+            "trust": trust,
+            "latency_ms": latency_ms,
+        },
+    )
+
+    return {"answer": answer, "citations": citations, "trust": trust, "latency_ms": latency_ms}
+
+
+@app.get("/metrics/requests")
+def metrics_requests():
+    """
+    Lightweight aggregation over logs/requests.jsonl (assistant_answer events).
+    """
+    import json
+
+    path = LOG_DIR / "requests.jsonl"
+    if not path.exists():
+        return {"count": 0, "avg_latency_ms": None, "avg_trust": None, "avg_citations": None}
+
+    latencies = []
+    trusts = []
+    cits = []
+    count = 0
+    with path.open() as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if rec.get("event") != "assistant_answer":
+                continue
+            count += 1
+            if rec.get("latency_ms") is not None:
+                latencies.append(rec["latency_ms"])
+            if rec.get("trust") is not None:
+                trusts.append(rec["trust"])
+            if rec.get("citations") is not None:
+                cits.append(rec["citations"])
+
+    def avg(arr):
+        return sum(arr) / len(arr) if arr else None
+
+    return {
+        "count": count,
+        "avg_latency_ms": avg(latencies),
+        "avg_trust": avg(trusts),
+        "avg_citations": avg(cits),
+    }
 
 # ------------------------------
 # Load FAISS index and metadata
@@ -79,12 +254,17 @@ except RuntimeError as err:
 
 EMBED_MODEL = "text-embedding-3-small"  # aligned with 1536-dim pgvector schema
 
+# Logger for observability
+REQUEST_LOG = setup_file_logger(LOG_DIR / "requests.jsonl")
+
 def get_embedding(text: str) -> np.ndarray:
     """Generate embedding vector for a query string."""
     if client is None:
         raise HTTPException(status_code=503, detail="OpenAI client not configured.")
     response = client.embeddings.create(model=EMBED_MODEL, input=[text])
     return np.array([response.data[0].embedding], dtype="float32")
+
+
 
 
 def log_request(entry: dict) -> None:

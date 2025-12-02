@@ -8,6 +8,7 @@ from typing import List, Optional, Tuple
 from fastapi import APIRouter, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 from PyPDF2 import PdfReader
+from openai import OpenAI
 
 from db import execute, fetchall, fetchone
 from embeddings import get_embedding
@@ -53,7 +54,7 @@ def _chunk_text(text: str, target_min: int = 300, target_max: int = 700, overlap
 def _embed_and_store_chunks(document_id: int, chunks: List[Tuple[int, int, str]]) -> None:
     for page_no, chunk_idx, text in chunks:
         emb = get_embedding(text)
-        execute(
+        row = fetchone(
             """
             INSERT INTO chunks (document_id, page_no, chunk_index, text, tokens)
             VALUES (%s, %s, %s, %s, %s)
@@ -61,8 +62,7 @@ def _embed_and_store_chunks(document_id: int, chunks: List[Tuple[int, int, str]]
             """,
             [document_id, page_no, chunk_idx, text, len(text.split())],
         )
-        row = fetchone("SELECT currval(pg_get_serial_sequence('chunks','id')) as cid")
-        cid = row["cid"]
+        cid = row["id"]
         execute(
             """
             INSERT INTO chunk_embeddings (chunk_id, model, dim, vector)
@@ -74,7 +74,15 @@ def _embed_and_store_chunks(document_id: int, chunks: List[Tuple[int, int, str]]
 
 @router.get("")
 def list_documents():
-    docs = fetchall("SELECT id, title, status, pages, bytes, created_at FROM documents ORDER BY created_at DESC LIMIT 100")
+    # Show unique titles (best-effort) ordered by recency
+    docs = fetchall(
+        """
+        SELECT DISTINCT ON (title) id, title, status, pages, bytes, created_at
+        FROM documents
+        ORDER BY title, created_at DESC
+        LIMIT 100
+        """
+    )
     return {"documents": docs}
 
 
@@ -100,15 +108,15 @@ async def upload_document(file: UploadFile = File(...), title: Optional[str] = N
     sha = _hash_bytes(data)
     mime = file.content_type or "application/octet-stream"
 
-    execute(
+    doc_row = fetchone(
         """
         INSERT INTO documents (title, source_path, mime_type, bytes, hash_sha256, status)
         VALUES (%s, %s, %s, %s, %s, 'processing')
+        RETURNING id
         """,
         [title or file.filename, str(fpath), mime, len(data), sha],
     )
-    doc_row = fetchone("SELECT currval(pg_get_serial_sequence('documents','id')) as did")
-    doc_id = doc_row["did"]
+    doc_id = doc_row["id"]
 
     pages = []
     if mime == "application/pdf" or file.filename.lower().endswith(".pdf"):
@@ -121,17 +129,38 @@ async def upload_document(file: UploadFile = File(...), title: Optional[str] = N
         for idx, chunk in enumerate(_chunk_text(text)):
             chunk_tuples.append((page_no, idx, chunk))
 
-    if chunk_tuples:
-        _embed_and_store_chunks(doc_id, chunk_tuples)
-        execute("UPDATE documents SET pages=%s, status='ready' WHERE id=%s", [len(pages), doc_id])
-    else:
+    try:
+        if chunk_tuples:
+            _embed_and_store_chunks(doc_id, chunk_tuples)
+            execute("UPDATE documents SET pages=%s, status='ready' WHERE id=%s", [len(pages), doc_id])
+        else:
+            execute("UPDATE documents SET status='error' WHERE id=%s", [doc_id])
+        return JSONResponse({"document_id": doc_id, "pages": len(pages), "chunks": len(chunk_tuples)})
+    except Exception as exc:
+        # Mark as error so UI doesn't stay "processing" forever
         execute("UPDATE documents SET status='error' WHERE id=%s", [doc_id])
-
-    return JSONResponse({"document_id": doc_id, "pages": len(pages), "chunks": len(chunk_tuples)})
+        raise HTTPException(status_code=500, detail=f"Ingest failed: {exc}")
 
 
 @router.post("/search/chunks")
-def search_chunks(q: str, k: int = 10, doc_id: Optional[int] = None):
+def search_chunks(payload: dict = None, q: str = None, k: int = 10, doc_id: Optional[int] = None):
+    """
+    Accepts JSON body {q, k, doc_id}. Allows query param q fallback.
+    """
+    # Normalize payload to dict
+    if payload is None:
+        payload = {}
+    elif isinstance(payload, str):
+        payload = {"q": payload}
+    elif not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid payload")
+
+    q = payload.get("q") or q or ""
+    if not q:
+        raise HTTPException(status_code=400, detail="q (query) is required")
+    k = int(payload.get("k") or k or 10)
+    doc_id = payload.get("doc_id") if payload.get("doc_id") is not None else doc_id
+
     qvec = get_embedding(q)
     params = [qvec]
     where = ""
@@ -141,7 +170,7 @@ def search_chunks(q: str, k: int = 10, doc_id: Optional[int] = None):
     rows = fetchall(
         f"""
         SELECT chunks.id, chunks.document_id, chunks.text, chunks.page_no, chunks.chunk_index,
-               chunk_embeddings.vector <-> %s AS distance
+               chunk_embeddings.vector <-> %s::vector AS distance
         FROM chunk_embeddings
         JOIN chunks ON chunk_embeddings.chunk_id = chunks.id
         {where}
@@ -153,9 +182,41 @@ def search_chunks(q: str, k: int = 10, doc_id: Optional[int] = None):
     return {"results": rows}
 
 
+@router.delete("/{doc_id}")
+def delete_document(doc_id: int):
+    """
+    Delete a document and its chunks/embeddings. Also delete from chat_uploads if present.
+    """
+    # Best-effort cleanup of chunk embeddings and chat uploads
+    execute("DELETE FROM chunk_embeddings USING chunks WHERE chunk_embeddings.chunk_id = chunks.id AND chunks.document_id=%s", [doc_id])
+    execute("DELETE FROM chunks WHERE document_id=%s", [doc_id])
+    execute("DELETE FROM chat_uploads WHERE doc_id=%s", [doc_id])
+    execute("DELETE FROM documents WHERE id=%s", [doc_id])
+    return {"ok": True, "document_id": doc_id}
+
+
 @router.post("/qa")
 def qa_over_chunks(q: str, k: int = 8, doc_id: Optional[int] = None):
+    """
+    Run RAG over uploaded documents (chunk store) and answer with GPT-4o-mini.
+    Returns answer and citations (chunk ids + doc ids).
+    """
     res = search_chunks(q, k=k, doc_id=doc_id)["results"]
-    context = "\n\n".join([r["text"] for r in res])
-    answer = f"(stub) Top chunks used: {len(res)}. Use this context to answer:\n{context[:1000]}"
+    if not res:
+        return {"answer": "No relevant chunks found.", "chunks_used": []}
+    context = ""
+    for r in res:
+        context += f"### Document {r['document_id']} - Chunk {r['id']} (page {r.get('page_no','?')})\n{r['text']}\n\n"
+
+    client = OpenAI()
+    prompt = (
+        "You are a research assistant. Answer concisely and cite the document/chunk ids you used.\n\n"
+        f"Question: {q}\n\nContext:\n{context}"
+    )
+    completion = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
+    )
+    answer = completion.choices[0].message.content
     return {"answer": answer, "chunks_used": res}

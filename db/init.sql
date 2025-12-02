@@ -85,3 +85,31 @@ CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(document_id);
 CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_chunk ON chunk_embeddings(chunk_id);
 -- Optional ANN index (build after data load)
 -- CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_ivfflat ON chunk_embeddings USING ivfflat (vector vector_cosine_ops) WITH (lists = 100);
+
+-- --- Chat sessions/messages/uploads ---
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id SERIAL PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id SERIAL PRIMARY KEY,
+    session_id INT REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    role TEXT NOT NULL, -- 'user' | 'assistant'
+    content TEXT,
+    citations JSONB,
+    created_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS chat_uploads (
+    id SERIAL PRIMARY KEY,
+    session_id INT REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    doc_id INT REFERENCES documents(id) ON DELETE SET NULL,
+    file_path TEXT,
+    mime_type TEXT,
+    created_at TIMESTAMP DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_chat_uploads_session ON chat_uploads(session_id);
