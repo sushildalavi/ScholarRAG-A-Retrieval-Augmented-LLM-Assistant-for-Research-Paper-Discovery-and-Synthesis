@@ -44,3 +44,19 @@ def fetchall(query: str, params: Optional[Iterable[Any]] = None):
                 return [dict(zip(cols, row)) for row in cur.fetchall()]
     finally:
         conn.close()
+
+
+def fetchone(query: str, params: Optional[Iterable[Any]] = None):
+    """Run SELECT and return single row as dict or None."""
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params or [])
+                row = cur.fetchone()
+                if row is None:
+                    return None
+                cols = [desc[0] for desc in cur.description]
+                return dict(zip(cols, row))
+    finally:
+        conn.close()

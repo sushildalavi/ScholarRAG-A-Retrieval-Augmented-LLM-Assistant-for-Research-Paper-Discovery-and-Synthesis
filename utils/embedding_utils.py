@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import time
+import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -11,7 +12,7 @@ from utils.config import get_openai_api_key
 from openai import OpenAI
 
 
-EMBED_MODEL = "text-embedding-3-large"
+EMBED_MODEL = "text-embedding-3-small"  # faster/cheaper, good quality
 EMBED_CACHE_ENABLED = os.getenv("EMBED_CACHE_ENABLED", "1") != "0"
 EMBED_CACHE_PATH = Path(os.getenv("EMBED_CACHE_PATH", "data/embed_cache.sqlite"))
 CHUNK_SIZE = 64
@@ -19,6 +20,7 @@ MAX_RETRIES = 3
 
 
 _cache_conn = None
+_cache_lock = threading.Lock()
 
 
 def _client() -> OpenAI:
@@ -42,7 +44,8 @@ def _ensure_cache() -> sqlite3.Connection | None:
         return None
     if _cache_conn is None:
         EMBED_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _cache_conn = sqlite3.connect(EMBED_CACHE_PATH)
+        # Allow use across threads inside FastAPI worker threads
+        _cache_conn = sqlite3.connect(EMBED_CACHE_PATH, check_same_thread=False)
         _cache_conn.execute(
             """
             CREATE TABLE IF NOT EXISTS embeddings (
@@ -65,10 +68,11 @@ def _cache_fetch(doc_ids: List[str]) -> Dict[str, np.ndarray]:
         return {}
     placeholders = ",".join(["?"] * len(doc_ids))
     keys = [_cache_key(doc_id) for doc_id in doc_ids]
-    rows = conn.execute(
-        f"SELECT cache_key, dim, vector FROM embeddings WHERE cache_key IN ({placeholders})",
-        keys,
-    ).fetchall()
+    with _cache_lock:
+        rows = conn.execute(
+            f"SELECT cache_key, dim, vector FROM embeddings WHERE cache_key IN ({placeholders})",
+            keys,
+        ).fetchall()
     result: Dict[str, np.ndarray] = {}
     for key, dim, blob in rows:
         vec = np.frombuffer(blob, dtype=np.float32).reshape(1, dim)
@@ -82,8 +86,9 @@ def _cache_store(vectors: Dict[str, np.ndarray]) -> None:
     if conn is None or not vectors:
         return
     rows = [(_cache_key(doc_id), vec.shape[1], vec.astype(np.float32).tobytes()) for doc_id, vec in vectors.items()]
-    conn.executemany("REPLACE INTO embeddings (cache_key, dim, vector) VALUES (?, ?, ?)", rows)
-    conn.commit()
+    with _cache_lock:
+        conn.executemany("REPLACE INTO embeddings (cache_key, dim, vector) VALUES (?, ?, ?)", rows)
+        conn.commit()
 
 
 def _retry_call(fn, *args, **kwargs):
