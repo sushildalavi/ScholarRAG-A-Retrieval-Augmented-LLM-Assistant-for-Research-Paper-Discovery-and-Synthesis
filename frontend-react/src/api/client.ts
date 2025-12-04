@@ -79,4 +79,8 @@ export const api = {
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   },
+
+  async rawGet(path: string): Promise<any> {
+    return jsonRequest(path, { method: 'GET' });
+  },
 };

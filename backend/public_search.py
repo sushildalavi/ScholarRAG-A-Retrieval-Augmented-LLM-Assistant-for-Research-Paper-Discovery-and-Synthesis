@@ -10,6 +10,11 @@ def public_live_search(query: str, k: int = 8):
     """
     Fetch fresh candidates from external sources and rerank with embeddings (no FAISS).
     """
+    # trivial chatty queries: skip external search
+    qnorm = (query or "").strip().lower()
+    if not qnorm or len(qnorm) < 3 or qnorm in {"hi", "hello", "hey", "thanks", "thank you"}:
+        return []
+
     candidates = []
     candidates += fetch_candidates_from_openalex(query, limit=15)
     candidates += fetch_arxiv_candidates(query, limit=15)
@@ -45,6 +50,8 @@ def public_live_search(query: str, k: int = 8):
             continue
         sim = float(np.dot(qv, vec.T)[0][0])
         c["_sim"] = sim
+        if not c.get("source"):
+            c["source"] = "public"
         scored.append(c)
     scored.sort(key=lambda x: x.get("_sim", 0), reverse=True)
     return scored[:k]

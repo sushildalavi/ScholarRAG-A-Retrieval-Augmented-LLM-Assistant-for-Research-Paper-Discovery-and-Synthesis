@@ -8,10 +8,29 @@ type Props = {
 
 export function AnswerPanel({ answer, citations, streaming }: Props) {
   if (!answer) return null;
+
+  const formatAnswer = (txt: string) => {
+    if (!txt) return '';
+    // bold **text**
+    let html = txt.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    // inline code `code`
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    // block LaTeX $$...$$
+    html = html.replace(/\$\$([^$]+)\$\$/g, '<div class="latex-block">$$$1$$</div>');
+    // inline LaTeX $...$
+    html = html.replace(/\$([^$]+)\$/g, '<span class="latex-inline">$$$1$$</span>');
+    // newlines to <br>
+    html = html.replace(/\n/g, '<br/>');
+    return html;
+  };
+
   return (
     <div className="card">
       <h3>Answer</h3>
-      <div className={`answer-text ${streaming ? 'answer-stream' : ''}`}>{answer}</div>
+      <div
+        className={`answer-text ${streaming ? 'answer-stream' : ''}`}
+        dangerouslySetInnerHTML={{ __html: formatAnswer(answer) }}
+      />
       {!!citations?.length && (
         <div className="citations">
           <h4>Citations</h4>

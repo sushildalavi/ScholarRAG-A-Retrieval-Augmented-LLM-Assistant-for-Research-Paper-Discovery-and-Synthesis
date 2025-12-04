@@ -57,6 +57,46 @@ def favicon():
 
 
 # ------------------------------
+# Metrics endpoint (stub / cached)
+# ------------------------------
+
+
+@app.get("/metrics")
+def metrics():
+    """
+    Return simple evaluation/ops metrics for the UI.
+
+    Replace the stub values with real numbers from your eval pipeline or a
+    metrics table when available.
+    """
+    now = datetime.utcnow().isoformat() + "Z"
+    return {
+        "updated_at": now,
+        "retrieval": {
+            "recall_at_5": 0.73,
+            "ndcg_at_10": 0.61,
+            "mrr": 0.55,
+        },
+        "latency_ms": {
+            "p50": 420,
+            "p95": 980,
+            "p99": 1600,
+        },
+        "token": {
+            "avg_prompt": 520,
+            "avg_completion": 180,
+        },
+        "sources": {
+            "uploaded": 42,
+            "arxiv": 28,
+            "openalex": 18,
+            "springer": 7,
+            "ieee": 5,
+        },
+    }
+
+
+# ------------------------------
 # Assistant endpoint (RAG + GPT-4o-mini)
 # ------------------------------
 
@@ -86,6 +126,58 @@ def assistant_answer(
 
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
+
+    qnorm = query.strip().lower()
+    # Heuristic routing: simple chat vs research
+    small_talk_triggers = {"hi", "hello", "hey", "heyy", "sup", "ssup", "thanks", "thank you", "yo", "help", "how are you"}
+    research_cues = {
+        "paper",
+        "study",
+        "research",
+        "citation",
+        "doi",
+        "arxiv",
+        "openalex",
+        "ieee",
+        "springer",
+        "journal",
+        "conference",
+        "dataset",
+        "method",
+        "results",
+        "conclusion",
+        "abstract",
+        "experiment",
+    }
+    is_small_talk = len(qnorm.split()) <= 4 and any(t in qnorm for t in small_talk_triggers)
+    is_research = any(t in qnorm for t in research_cues) or len(qnorm.split()) >= 6
+
+    if not is_research:
+        try:
+            completion = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant. Answer conversationally. Do not fabricate citations."},
+                    {"role": "user", "content": query},
+                ],
+                temperature=0.6,
+            )
+            answer = completion.choices[0].message.content
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"LLM error: {exc}") from exc
+
+        log_json(
+            REQUEST_LOG,
+            {
+                "ts": time.time(),
+                "event": "assistant_answer_chat",
+                "query": query,
+                "scope": "chat",
+                "citations": 0,
+                "latency_ms": int((time.time() - started) * 1000),
+            },
+        )
+        return {"answer": answer, "citations": []}
 
     def fetch_context(q: str):
         local_citations = []
@@ -135,7 +227,14 @@ def assistant_answer(
         context_blocks.extend(ctx)
         citations.extend(cits)
 
-    context = "\n\n".join(context_blocks[:k]) if context_blocks else "No context found."
+    if not context_blocks:
+        # No retrieval: return a lightweight response without calling LLM on junk
+        return {
+            "answer": "I couldn't find relevant material for that query. Try a more specific research question or upload a document.",
+            "citations": [],
+        }
+
+    context = "\n\n".join(context_blocks[:k])
     prompt = (
         "You are a research assistant. Use the provided context to answer. "
         "Respond with a detailed answer (multiple paragraphs) and cite sources inline like [1], [2]. "
