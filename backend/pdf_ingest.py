@@ -7,6 +7,7 @@ from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, File, UploadFile, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
+from openai import OpenAI
 from PyPDF2 import PdfReader
 
 from backend.services.db import execute, fetchall, fetchone
