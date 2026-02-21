@@ -5,12 +5,16 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
-from fastapi.responses import JSONResponse
 from openai import OpenAI
 
-from db import execute, fetchall, fetchone
-from embeddings import get_embedding
-from backend.pdf_ingest import _extract_pdf_text, _chunk_text, _embed_and_store_chunks
+from backend.services.db import execute, fetchall, fetchone
+from backend.pdf_ingest import (
+    _extract_pdf_text,
+    _chunk_text,
+    _embed_and_store_chunks,
+    _is_supported_upload,
+    _sanitize_text,
+)
 from backend.public_search import public_live_search
 from backend.pdf_ingest import search_chunks as search_uploaded_chunks
 
@@ -89,10 +93,12 @@ def _ingest_upload(session_id: int, upload: UploadFile) -> Optional[int]:
     data = upload.file.read()
     if not data:
         return None
+    mime = upload.content_type or "application/octet-stream"
+    if not _is_supported_upload(upload.filename or "", mime):
+        raise HTTPException(status_code=400, detail="Unsupported file type. Upload PDF, TXT, or Markdown files.")
     fname = f"{int(time.time())}_{upload.filename}"
     fpath = CHAT_UPLOAD_DIR / fname
     fpath.write_bytes(data)
-    mime = upload.content_type or "application/octet-stream"
 
     doc_row = fetchone(
         """
@@ -109,7 +115,7 @@ def _ingest_upload(session_id: int, upload: UploadFile) -> Optional[int]:
         pages = _extract_pdf_text(data)
     else:
         try:
-            pages = [(1, data.decode(errors="ignore"))]
+            pages = [(1, _sanitize_text(data.decode("utf-8", errors="ignore")))]
         except Exception:
             pages = []
 
@@ -119,8 +125,11 @@ def _ingest_upload(session_id: int, upload: UploadFile) -> Optional[int]:
             chunk_tuples.append((page_no, idx, chunk))
 
     if chunk_tuples:
-        _embed_and_store_chunks(doc_id, chunk_tuples)
-        execute("UPDATE documents SET pages=%s, status='ready' WHERE id=%s", [len(pages), doc_id])
+        inserted = _embed_and_store_chunks(doc_id, chunk_tuples)
+        if inserted > 0:
+            execute("UPDATE documents SET pages=%s, status='ready' WHERE id=%s", [len(pages), doc_id])
+        else:
+            execute("UPDATE documents SET status='error' WHERE id=%s", [doc_id])
     else:
         execute("UPDATE documents SET status='error' WHERE id=%s", [doc_id])
 

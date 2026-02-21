@@ -5,18 +5,20 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from fastapi import APIRouter, File, UploadFile, HTTPException
+from fastapi import APIRouter, File, UploadFile, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 from PyPDF2 import PdfReader
-from openai import OpenAI
 
-from db import execute, fetchall, fetchone
-from embeddings import get_embedding
+from backend.services.db import execute, fetchall, fetchone
+from backend.services.embeddings import get_embedding, get_embeddings
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "storage"))
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md"}
+ALLOWED_MIME_PREFIXES = ("text/",)
+ALLOWED_EXACT_MIME = {"application/pdf"}
 
 
 def _hash_bytes(data: bytes) -> str:
@@ -51,9 +53,36 @@ def _chunk_text(text: str, target_min: int = 300, target_max: int = 700, overlap
     return chunks
 
 
-def _embed_and_store_chunks(document_id: int, chunks: List[Tuple[int, int, str]]) -> None:
+def _sanitize_text(text: str) -> str:
+    """
+    Remove characters that Postgres text columns reject.
+    """
+    return text.replace("\x00", "")
+
+
+def _is_supported_upload(filename: str, mime: str) -> bool:
+    ext = Path(filename.lower()).suffix
+    if ext in ALLOWED_EXTENSIONS:
+        return True
+    if mime in ALLOWED_EXACT_MIME:
+        return True
+    return any(mime.startswith(prefix) for prefix in ALLOWED_MIME_PREFIXES)
+
+
+def _embed_and_store_chunks(document_id: int, chunks: List[Tuple[int, int, str]]) -> int:
+    clean_chunks: List[Tuple[int, int, str]] = []
     for page_no, chunk_idx, text in chunks:
-        emb = get_embedding(text)
+        text = _sanitize_text(text)
+        if not text.strip():
+            continue
+        clean_chunks.append((page_no, chunk_idx, text))
+
+    if not clean_chunks:
+        return 0
+
+    embeddings = get_embeddings([text for _, _, text in clean_chunks])
+    inserted = 0
+    for (page_no, chunk_idx, text), emb in zip(clean_chunks, embeddings):
         row = fetchone(
             """
             INSERT INTO chunks (document_id, page_no, chunk_index, text, tokens)
@@ -70,6 +99,8 @@ def _embed_and_store_chunks(document_id: int, chunks: List[Tuple[int, int, str]]
             """,
             [cid, "text-embedding-3-small", 1536, emb],
         )
+        inserted += 1
+    return inserted
 
 
 @router.get("")
@@ -96,17 +127,22 @@ def latest_documents(limit: int = 10):
 
 
 @router.post("/upload")
-async def upload_document(file: UploadFile = File(...), title: Optional[str] = None):
+async def upload_document(file: UploadFile = File(...), title: Optional[str] = None, background_tasks: BackgroundTasks = None):
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
+    mime = file.content_type or "application/octet-stream"
+    if not _is_supported_upload(file.filename or "", mime):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Upload PDF, TXT, or Markdown files.",
+        )
 
     fname = f"{int(time.time())}_{file.filename}"
     fpath = STORAGE_DIR / fname
     fpath.write_bytes(data)
 
     sha = _hash_bytes(data)
-    mime = file.content_type or "application/octet-stream"
 
     doc_row = fetchone(
         """
@@ -118,28 +154,40 @@ async def upload_document(file: UploadFile = File(...), title: Optional[str] = N
     )
     doc_id = doc_row["id"]
 
-    pages = []
-    if mime == "application/pdf" or file.filename.lower().endswith(".pdf"):
-        pages = _extract_pdf_text(data)
+    # Offload heavy parsing/embedding to background to return fast
+    if background_tasks is not None:
+        background_tasks.add_task(_ingest_document, doc_id, data, mime, file.filename, title)
     else:
-        pages = [(1, data.decode(errors="ignore"))]
+        _ingest_document(doc_id, data, mime, file.filename, title)
 
-    chunk_tuples: List[Tuple[int, int, str]] = []
-    for page_no, text in pages:
-        for idx, chunk in enumerate(_chunk_text(text)):
-            chunk_tuples.append((page_no, idx, chunk))
+    return JSONResponse({"document_id": doc_id, "status": "processing"})
 
+
+def _ingest_document(doc_id: int, data: bytes, mime: str, filename: str, title: Optional[str]):
     try:
+        if mime == "application/pdf" or filename.lower().endswith(".pdf"):
+            pages = _extract_pdf_text(data)
+        else:
+            decoded = data.decode("utf-8", errors="ignore")
+            pages = [(1, _sanitize_text(decoded))]
+
+        chunk_tuples: List[Tuple[int, int, str]] = []
+        for page_no, text in pages:
+            text = _sanitize_text(text)
+            for idx, chunk in enumerate(_chunk_text(text)):
+                chunk_tuples.append((page_no, idx, chunk))
+
         if chunk_tuples:
-            _embed_and_store_chunks(doc_id, chunk_tuples)
-            execute("UPDATE documents SET pages=%s, status='ready' WHERE id=%s", [len(pages), doc_id])
+            inserted = _embed_and_store_chunks(doc_id, chunk_tuples)
+            if inserted > 0:
+                execute("UPDATE documents SET pages=%s, status='ready' WHERE id=%s", [len(pages), doc_id])
+            else:
+                execute("UPDATE documents SET status='error' WHERE id=%s", [doc_id])
         else:
             execute("UPDATE documents SET status='error' WHERE id=%s", [doc_id])
-        return JSONResponse({"document_id": doc_id, "pages": len(pages), "chunks": len(chunk_tuples)})
     except Exception as exc:
-        # Mark as error so UI doesn't stay "processing" forever
         execute("UPDATE documents SET status='error' WHERE id=%s", [doc_id])
-        raise HTTPException(status_code=500, detail=f"Ingest failed: {exc}")
+        raise
 
 
 @router.post("/search/chunks")

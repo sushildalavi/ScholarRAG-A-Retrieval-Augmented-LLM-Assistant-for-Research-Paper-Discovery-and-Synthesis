@@ -14,9 +14,6 @@ class Paper:
 
 
 def paper_to_row(paper: Paper, embedding: list[float]) -> Tuple:
-    """
-    Map a Paper + embedding to a tuple for insertion/upsert into the papers table.
-    """
     authors_str = paper.authors if isinstance(paper.authors, str) else ", ".join(paper.authors)
     return (
         paper.paper_id,

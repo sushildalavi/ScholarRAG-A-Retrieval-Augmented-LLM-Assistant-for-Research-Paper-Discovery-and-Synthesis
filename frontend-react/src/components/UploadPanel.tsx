@@ -11,10 +11,13 @@ export function UploadPanel({ onUploaded }: Props) {
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || !files.length) return;
-    const file = files[0];
-    setStatus('Uploading...');
+    setStatus(`Uploading ${files.length} file(s)...`);
     try {
-      const res = await api.uploadFile(file);
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setStatus(`Uploading ${i + 1}/${files.length}: ${file.name}`);
+        await api.uploadFile(file);
+      }
       setStatus('Upload complete');
       onUploaded();
     } catch (e: any) {
@@ -32,7 +35,7 @@ export function UploadPanel({ onUploaded }: Props) {
       >
         <div className="drop-icon">📄</div>
         <div className="drop-text">Drag research PDFs here, or <span className="highlight">browse</span>.</div>
-        <input type="file" onChange={(e) => handleFiles(e.target.files)} />
+        <input type="file" accept=".pdf,.txt,.md,text/plain,application/pdf,text/markdown" multiple onChange={(e) => handleFiles(e.target.files)} />
       </div>
       <button className="primary-btn" onClick={() => document.querySelector<HTMLInputElement>('.dropzone input')?.click()}>
         + Upload Source

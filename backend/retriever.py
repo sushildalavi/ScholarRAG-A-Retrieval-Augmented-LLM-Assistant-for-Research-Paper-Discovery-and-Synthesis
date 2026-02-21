@@ -1,9 +1,27 @@
 import logging
 import os
+import re
 from typing import Dict, List, Tuple, Optional
 
 import faiss
 import numpy as np
+
+# Optional cross-encoder reranking
+USE_CROSS_ENCODER = os.getenv("USE_CROSS_ENCODER", "false").lower() == "true"
+CROSS_ENCODER_MODEL = os.getenv("CROSS_ENCODER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+CROSS_ENCODER_TOPN = int(os.getenv("CROSS_ENCODER_TOPN", "30")) or 30
+
+# Lightweight lexical blend to boost exact matches (names, years, keywords)
+USE_LEXICAL_BLEND = os.getenv("USE_LEXICAL_BLEND", "true").lower() == "true"
+LEXICAL_WEIGHT = float(os.getenv("LEXICAL_WEIGHT", "0.12"))
+
+if USE_CROSS_ENCODER:
+    try:
+        import torch
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    except Exception as exc:  # noqa
+        logging.warning("Cross-encoder requested but transformers/torch not available: %s", exc)
+        USE_CROSS_ENCODER = False
 
 from utils.embedding_utils import embed_query, embed_batch_cached
 from utils.openalex_utils import fetch_candidates_from_openalex
@@ -30,6 +48,18 @@ class Retriever:
     def __init__(self, index: faiss.Index, metadata: List[Dict]):
         self.index = index
         self.meta = metadata
+        self.cross_encoder = None
+        self.cross_tokenizer = None
+        if USE_CROSS_ENCODER:
+            try:
+                self.cross_tokenizer = AutoTokenizer.from_pretrained(CROSS_ENCODER_MODEL)
+                self.cross_encoder = AutoModelForSequenceClassification.from_pretrained(CROSS_ENCODER_MODEL)
+                self.cross_encoder.eval()
+                logger.info("Loaded cross-encoder model: %s", CROSS_ENCODER_MODEL)
+            except Exception as exc:  # noqa
+                logger.warning("Failed to load cross-encoder %s: %s", CROSS_ENCODER_MODEL, exc)
+                self.cross_encoder = None
+                self.cross_tokenizer = None
 
     @staticmethod
     def _year_within(doc: Dict, year_from: Optional[int], year_to: Optional[int]) -> bool:
@@ -82,17 +112,68 @@ class Retriever:
         emb_map = embed_batch_cached(texts) if texts else {}
         qv = embed_query(query)
 
+        def lexical_overlap_score(q: str, t: str) -> float:
+            if not USE_LEXICAL_BLEND:
+                return 0.0
+            qtoks = {w for w in re.findall(r"[a-zA-Z0-9]+", q.lower()) if len(w) > 2}
+            ttoks = {w for w in re.findall(r"[a-zA-Z0-9]+", t.lower()) if len(w) > 2}
+            if not qtoks or not ttoks:
+                return 0.0
+            return len(qtoks & ttoks) / max(len(qtoks), 1)
+
         scored = []
         for (doc_id, _), doc in zip(texts, pool):
             vec = emb_map.get(doc_id)
             if vec is None:
                 continue
             sim = float(np.dot(qv, vec.T)[0][0])
+            lex = lexical_overlap_score(query, doc.get("abstract") or doc.get("summary") or doc.get("title") or "")
             doc["_sim"] = sim
+            doc["_lex"] = lex
+            doc["_score"] = sim + (LEXICAL_WEIGHT * lex)
             scored.append(doc)
 
-        scored.sort(key=lambda d: d.get("_sim", 0.0), reverse=True)
+        scored.sort(key=lambda d: d.get("_score", d.get("_sim", 0.0)), reverse=True)
         return scored[:k], {"pool": len(pool), "scored": len(scored)}
+
+    def _cross_encoder_rerank(self, query: str, pool: List[Dict], k: int) -> Tuple[List[Dict], Dict]:
+        """Use a cross-encoder to rerank the pool. Falls back to semantic if CE unavailable."""
+        if self.cross_encoder is None or self.cross_tokenizer is None:
+            return self._semantic_rerank(query, pool, k)
+
+        topn = min(CROSS_ENCODER_TOPN, len(pool))
+        candidates = pool[:topn]
+
+        pairs = []
+        for i, doc in enumerate(candidates):
+            doc_id = str(doc.get("id") or doc.get("_local_id") or i)
+            text = (doc.get("title") or "") + "\n" + (doc.get("abstract") or doc.get("summary") or "")
+            pairs.append((doc_id, text, doc))
+
+        if not pairs:
+            return [], {"pool": 0, "scored": 0}
+
+        scores = []
+        batch_size = 16
+        for start in range(0, len(pairs), batch_size):
+            chunk = pairs[start:start + batch_size]
+            enc = self.cross_tokenizer(
+                [query] * len(chunk),
+                [t[1] for t in chunk],
+                padding=True,
+                truncation=True,
+                max_length=256,
+                return_tensors="pt",
+            )
+            with torch.no_grad():
+                logits = self.cross_encoder(**enc).logits.squeeze(-1)
+                batch_scores = logits.cpu().numpy().tolist()
+            for (doc_id, _, doc), s in zip(chunk, batch_scores):
+                doc["_ce"] = float(s)
+                scores.append(doc)
+
+        scores.sort(key=lambda d: d.get("_ce", 0.0), reverse=True)
+        return scores[:k], {"pool": len(pool), "scored": len(scores)}
 
     def _single_hop(self, query: str, k: int, min_pool: int, year_from: Optional[int], year_to: Optional[int]) -> Tuple[List[Dict], Dict]:
         hits = self.search_faiss(query, topk=max(50, k * 5))
@@ -136,7 +217,7 @@ class Retriever:
                 extra_ieee = fetch_from_ieee(query, limit=IEEE_FALLBACK_LIMIT, year_from=year_from, year_to=year_to)
                 added_from_ieee = self._dedup_merge(pool, [d for d in extra_ieee if self._year_within(d, year_from, year_to)])
 
-        topk_docs, counters = self._semantic_rerank(query, pool, k)
+        topk_docs, counters = self._cross_encoder_rerank(query, pool, k)
 
         stats = {
             "fallback_used": fallback_used,
@@ -178,7 +259,7 @@ class Retriever:
             hop_stats.append({"query": hop_q, **stats})
             self._dedup_merge(merged_pool, hop_docs)
 
-        top_docs, counters = self._semantic_rerank(query, merged_pool, k)
+        top_docs, counters = self._cross_encoder_rerank(query, merged_pool, k)
         any_fallback = any(s.get("fallback_used") for s in hop_stats)
         stats = {
             "fallback_used": any_fallback,

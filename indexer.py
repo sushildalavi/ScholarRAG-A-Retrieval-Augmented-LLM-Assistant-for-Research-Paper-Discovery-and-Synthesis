@@ -3,8 +3,8 @@ Ingestion and upsert pipeline.
 """
 from typing import Callable, Dict
 
-from db import execute
-from embeddings import get_embedding
+from backend.services.db import execute
+from backend.services.embeddings import get_embedding
 from models import Paper, paper_to_row
 from normalization import (
     normalize_openalex,

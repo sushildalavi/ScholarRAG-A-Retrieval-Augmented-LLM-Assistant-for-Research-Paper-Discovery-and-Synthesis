@@ -1,10 +1,7 @@
-"""
-Semantic search over papers using pgvector.
-"""
 from typing import List, Optional
 
-from db import fetchall
-from embeddings import get_embedding
+from backend.services.db import fetchall
+from backend.services.embeddings import get_embedding
 
 
 def search_papers(
@@ -14,11 +11,6 @@ def search_papers(
     sources: Optional[List[str]] = None,
     hybrid: bool = True,
 ) -> List[dict]:
-    """
-    Compute query embedding; order by summary presence, optional keyword match, and vector distance.
-    Optional filters: year_min, sources list.
-    Returns dicts with paper fields + distance.
-    """
     q_emb = get_embedding(query)
     params = [q_emb]
     filters = []

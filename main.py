@@ -1,6 +1,3 @@
-"""
-Demo entrypoint: index some sample papers and run a search.
-"""
 from indexer import index_from_source
 from search import search_papers
 

@@ -1,7 +1,3 @@
-"""
-Normalize source-specific raw dicts into the unified Paper model.
-Assumes typical fields; adjust mappings when wiring real APIs.
-"""
 from models import Paper
 
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Dispatch, SetStateAction, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api/client';
 import { DocumentRow, Citation } from './api/types';
 import { SearchBar } from './components/SearchBar';
@@ -6,6 +6,8 @@ import { UploadPanel } from './components/UploadPanel';
 import { LatestDocumentsList } from './components/LatestDocumentsList';
 import { ResultsList } from './components/ResultsList';
 // Center pane now renders chat-style bubbles instead of a static answer panel.
+
+type UiMessage = { role: 'you' | 'assistant'; text: string; streaming?: boolean };
 
 export default function App() {
   const [docs, setDocs] = useState<DocumentRow[]>([]);
@@ -20,13 +22,8 @@ export default function App() {
   const [loadingDoc, setLoadingDoc] = useState(false);
   const [streamDoc, setStreamDoc] = useState(false);
   const [errorDoc, setErrorDoc] = useState('');
-  const [docMessages, setDocMessages] = useState<{ role: 'you' | 'assistant'; text: string }[]>([]);
+  const [docMessages, setDocMessages] = useState<UiMessage[]>([]);
   const askDocRef = useRef<HTMLInputElement | null>(null);
-
-  // Metrics
-  const [metrics, setMetrics] = useState<any | null>(null);
-  const [metricsError, setMetricsError] = useState<string | null>(null);
-  const metricsIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Public + optional uploads
   const [questionPub, setQuestionPub] = useState('');
@@ -38,12 +35,12 @@ export default function App() {
   const [streamPub, setStreamPub] = useState(false);
   const [errorPub, setErrorPub] = useState('');
   const includeUploadsInPub = true; // always include uploads for assistant
-  const [chatMessages, setChatMessages] = useState<{ role: 'you' | 'assistant'; text: string }[]>([]);
+  const [chatMessages, setChatMessages] = useState<UiMessage[]>([]);
   const askPubRef = useRef<HTMLInputElement | null>(null);
   const uploadRightRef = useRef<HTMLInputElement | null>(null);
-  const uploadImageRef = useRef<HTMLInputElement | null>(null);
   const [uploadingRight, setUploadingRight] = useState(false);
   const [showUploadMenu, setShowUploadMenu] = useState(false);
+  const streamTimersRef = useRef<number[]>([]);
 
   const refreshDocs = async () => {
     try {
@@ -61,21 +58,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const fetchMetrics = () => {
-      api
-        .rawGet('/metrics')
-        .then((res) => {
-          setMetrics(res);
-          setMetricsError(null);
-        })
-        .catch((err) => setMetricsError(err?.message || 'Failed to load metrics'));
-    };
-    fetchMetrics();
-    metricsIntervalRef.current = setInterval(fetchMetrics, 60_000);
     return () => {
-      if (metricsIntervalRef.current) clearInterval(metricsIntervalRef.current);
+      streamTimersRef.current.forEach((id) => window.clearInterval(id));
+      streamTimersRef.current = [];
     };
   }, []);
+
+  useEffect(() => {
+    if (!docs.some((d) => d.status === 'processing')) return;
+    const id = setInterval(() => {
+      refreshDocs();
+    }, 2500);
+    return () => clearInterval(id);
+  }, [docs]);
 
   const dedupedDocs = useMemo(() => {
     const seen = new Set<string>();
@@ -89,10 +84,41 @@ export default function App() {
     return out;
   }, [docs]);
 
+  const streamAssistantMessage = (
+    setter: Dispatch<SetStateAction<UiMessage[]>>,
+    fullText: string,
+  ) => {
+    const finalText = fullText || 'No response received. Check backend/OpenAI key.';
+    setter((msgs) => [...msgs, { role: 'assistant', text: '', streaming: true }]);
+
+    let idx = 0;
+    const step = Math.max(1, Math.floor(finalText.length / 80));
+    const timer = window.setInterval(() => {
+      idx += step;
+      const partial = finalText.slice(0, idx);
+      const done = idx >= finalText.length;
+      setter((msgs) => {
+        const next = [...msgs];
+        for (let i = next.length - 1; i >= 0; i--) {
+          const m = next[i];
+          if (m.role === 'assistant' && m.streaming) {
+            next[i] = { role: 'assistant', text: partial, streaming: !done };
+            break;
+          }
+        }
+        return next;
+      });
+      if (done) {
+        window.clearInterval(timer);
+        streamTimersRef.current = streamTimersRef.current.filter((t) => t !== timer);
+      }
+    }, 18);
+    streamTimersRef.current.push(timer);
+  };
+
   const handleDocAsk = async () => {
     const text = questionDoc.trim();
     if (!text) return setErrorDoc('Please enter a question.');
-    if (!selectedDoc && !docs.length) return setErrorDoc('Upload and select a document first.');
     setErrorDoc('');
     setLoadingDoc(true);
     setStreamDoc(false);
@@ -107,28 +133,29 @@ export default function App() {
       if (pane) pane.scrollTop = pane.scrollHeight;
     }, 50);
     try {
+      const hasUploads = Boolean(selectedDoc || docs.length);
       const res = await api.askAssistant({
         query: text,
-        scope: 'uploaded',
-        doc_id: selectedDoc || undefined,
+        scope: hasUploads ? 'uploaded' : 'public',
+        doc_id: hasUploads && selectedDoc ? selectedDoc : undefined,
         k: 10,
       });
       const ans = (res.answer || '').trim();
       if (!ans) {
         setAnswerDoc('No response received. Check backend/OpenAI key.');
         setDisplayAnswerDoc('No response received. Check backend/OpenAI key.');
-        setDocMessages((msgs) => [...msgs, { role: 'assistant', text: 'No response received. Check backend/OpenAI key.' }]);
+        streamAssistantMessage(setDocMessages, 'No response received. Check backend/OpenAI key.');
       } else {
         setAnswerDoc(ans);
         setDisplayAnswerDoc(ans);
         setCitationsDoc(res.citations || []);
-        setDocMessages((msgs) => [...msgs, { role: 'assistant', text: ans }]);
+        streamAssistantMessage(setDocMessages, ans);
       }
     } catch (e) {
       setErrorDoc((e as any)?.message || 'Doc QA failed');
       setAnswerDoc('No response received. Check backend/OpenAI key.');
       setDisplayAnswerDoc('No response received. Check backend/OpenAI key.');
-      setDocMessages((msgs) => [...msgs, { role: 'assistant', text: 'No response received. Check backend/OpenAI key.' }]);
+      streamAssistantMessage(setDocMessages, 'No response received. Check backend/OpenAI key.');
     } finally {
       setLoadingDoc(false);
       setStreamDoc(false);
@@ -142,7 +169,6 @@ export default function App() {
   const handleDocSearch = async (q: string, k: number) => {
     const text = q.trim();
     if (!text) return setErrorDoc('Please enter a query.');
-    if (!selectedDoc && !docs.length) return setErrorDoc('Upload and select a document first.');
     setErrorDoc('');
     setLoadingDoc(true);
     setStreamDoc(false);
@@ -152,8 +178,14 @@ export default function App() {
     setDocMessages((msgs) => [...msgs, { role: 'you', text }]);
     setQuestionDoc('');
     try {
-      const res = await api.searchChunks(text, k, selectedDoc || undefined);
-      setResultsDoc(res.results || []);
+      if (selectedDoc || docs.length) {
+        const res = await api.searchChunks(text, k, selectedDoc || undefined);
+        setResultsDoc(res.results || []);
+      } else {
+        const res = await api.askAssistant({ query: text, scope: 'public', k });
+        const ans = (res.answer || '').trim() || 'No response received. Check backend/OpenAI key.';
+        streamAssistantMessage(setDocMessages, ans);
+      }
     } catch (e) {
       setErrorDoc((e as any)?.message || 'Search failed');
     }
@@ -169,6 +201,7 @@ export default function App() {
     setAnswerPub('');
     setDisplayAnswerPub('');
     setCitationsPub([]);
+    setChatMessages((msgs) => [...msgs, { role: 'you', text }]);
     try {
       const res = await api.askAssistant({
         query: text,
@@ -185,7 +218,7 @@ export default function App() {
         setDisplayAnswerPub(ans);
         setCitationsPub(res.citations || []);
       }
-      setChatMessages((msgs) => [...msgs, { role: 'you', text }, { role: 'assistant', text: ans || 'No response received. Check backend/OpenAI key.' }]);
+      streamAssistantMessage(setChatMessages, ans || 'No response received. Check backend/OpenAI key.');
       setQuestionPub('');
     } catch (e) {
       setErrorPub((e as any)?.message || 'Assistant failed');
@@ -206,6 +239,7 @@ export default function App() {
     setAnswerPub('');
     setDisplayAnswerPub('');
     setCitationsPub([]);
+    setChatMessages((msgs) => [...msgs, { role: 'you', text }]);
     try {
       const res = await api.askAssistant({
         query: text,
@@ -219,7 +253,7 @@ export default function App() {
       setAnswerPub(finalAns);
       setDisplayAnswerPub(finalAns);
       setCitationsPub(res.citations || []);
-      setChatMessages((msgs) => [...msgs, { role: 'you', text }, { role: 'assistant', text: finalAns }]);
+      streamAssistantMessage(setChatMessages, finalAns);
       setQuestionPub('');
     } catch (e) {
       setErrorPub((e as any)?.message || 'Search failed');
@@ -340,7 +374,10 @@ export default function App() {
             )}
             {docMessages.map((m, i) => (
               <div key={i} className={`chat-bubble-row ${m.role}`}>
-                <div className="chat-bubble">{m.text}</div>
+                <div className="chat-bubble">
+                  {m.text}
+                  {m.streaming && <span className="stream-cursor">▋</span>}
+                </div>
               </div>
             ))}
             {loadingDoc && (
@@ -374,53 +411,6 @@ export default function App() {
         <div className="right-header">
           <h3>AI Assistant</h3>
         </div>
-        {metricsError && <div className="alert">{metricsError}</div>}
-        {metrics && (
-          <div className="metrics-card">
-            <div className="metrics-header">
-              <span>Metrics</span>
-              <small>{metrics.updated_at ? new Date(metrics.updated_at).toLocaleTimeString() : ''}</small>
-            </div>
-            <div className="metrics-grid">
-              <div>
-                <div className="metric-label">Recall@5</div>
-                <div className="metric-value">{(metrics.retrieval?.recall_at_5 ?? 0).toFixed(2)}</div>
-              </div>
-              <div>
-                <div className="metric-label">nDCG@10</div>
-                <div className="metric-value">{(metrics.retrieval?.ndcg_at_10 ?? 0).toFixed(2)}</div>
-              </div>
-              <div>
-                <div className="metric-label">MRR</div>
-                <div className="metric-value">{(metrics.retrieval?.mrr ?? 0).toFixed(2)}</div>
-              </div>
-            </div>
-            <div className="metrics-grid">
-              <div>
-                <div className="metric-label">p50 latency</div>
-                <div className="metric-value">{metrics.latency_ms?.p50 ?? '-'} ms</div>
-              </div>
-              <div>
-                <div className="metric-label">p95 latency</div>
-                <div className="metric-value">{metrics.latency_ms?.p95 ?? '-'} ms</div>
-              </div>
-              <div>
-                <div className="metric-label">p99 latency</div>
-                <div className="metric-value">{metrics.latency_ms?.p99 ?? '-'} ms</div>
-              </div>
-            </div>
-            <div className="metrics-grid">
-              <div>
-                <div className="metric-label">Avg prompt</div>
-                <div className="metric-value">{metrics.token?.avg_prompt ?? '-'} tok</div>
-              </div>
-              <div>
-                <div className="metric-label">Avg completion</div>
-                <div className="metric-value">{metrics.token?.avg_completion ?? '-'} tok</div>
-              </div>
-            </div>
-          </div>
-        )}
         {errorPub && <div className="alert">{errorPub}</div>}
         <div className="assistant-body">
           {chatMessages.length === 0 && !loadingPub && (
@@ -434,7 +424,10 @@ export default function App() {
           )}
           {chatMessages.map((m, i) => (
             <div key={i} className={`chat-bubble-row ${m.role}`}>
-              <div className="chat-bubble">{m.text}</div>
+              <div className="chat-bubble">
+                {m.text}
+                {m.streaming && <span className="stream-cursor">▋</span>}
+              </div>
             </div>
           ))}
           {loadingPub && (
@@ -450,15 +443,8 @@ export default function App() {
         <div className="assistant-bottom">
           <input
             type="file"
-            accept=".pdf,.txt,.doc,.docx,.png,.jpg,.jpeg"
+            accept=".pdf,.txt,.md,text/plain,application/pdf,text/markdown"
             ref={uploadRightRef}
-            style={{ display: 'none' }}
-            onChange={(e) => handleRightUpload(e.target.files?.[0])}
-          />
-          <input
-            type="file"
-            accept="image/*"
-            ref={uploadImageRef}
             style={{ display: 'none' }}
             onChange={(e) => handleRightUpload(e.target.files?.[0])}
           />
@@ -480,14 +466,6 @@ export default function App() {
                   }}
                 >
                   Upload file
-                </button>
-                <button
-                  onClick={() => {
-                    setShowUploadMenu(false);
-                    uploadImageRef.current?.click();
-                  }}
-                >
-                  Upload photo
                 </button>
               </div>
             )}

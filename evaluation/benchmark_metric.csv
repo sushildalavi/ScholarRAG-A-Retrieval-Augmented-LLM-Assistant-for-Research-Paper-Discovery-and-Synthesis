@@ -1,0 +1,4 @@
+model,recall_at_5,recall_at_10,ndcg_at_10,mrr,latency_p50_ms,latency_p95_ms,token_cost
+ScholarRAG,0.73,0.81,0.61,0.55,420,980,0.003
+BiEncoder_only,0.62,0.70,0.50,0.44,510,1200,0.0035
+BiEncoder_plus_lexical,0.58,0.66,0.46,0.40,600,1400,0.0028
