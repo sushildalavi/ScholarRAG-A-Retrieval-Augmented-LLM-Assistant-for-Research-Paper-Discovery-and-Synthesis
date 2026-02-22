@@ -26,7 +26,7 @@ export function SearchBar({
   return (
     <div className="search-card">
       <div className="search-input-wrap">
-        <span className="search-icon">🔎</span>
+        <span className="search-icon" aria-hidden="true">⌕</span>
         <input
           ref={inputRef}
           value={value}
@@ -45,7 +45,7 @@ export function SearchBar({
           {loading ? 'Thinking…' : 'Search'}
         </button>
         {!hideAdvanced && (
-          <button className="ghost" onClick={onAdvanced} disabled={disabled || loading}>⚙</button>
+          <button className="ghost" onClick={onAdvanced} disabled={disabled || loading}>Filters</button>
         )}
       </div>
     </div>

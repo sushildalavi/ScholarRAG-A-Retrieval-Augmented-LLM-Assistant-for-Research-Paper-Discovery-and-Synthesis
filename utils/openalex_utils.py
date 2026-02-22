@@ -61,15 +61,19 @@ def fetch_candidates_from_openalex(
     """
 
     # Determine cap: explicit limit wins, otherwise env var, otherwise unlimited.
-    max_results = limit if limit is not None else DEFAULT_MAX_RESULTS
+    default_max_results = int(os.getenv("OPENALEX_MAX_RESULTS", "0")) or None
+    request_timeout = float(os.getenv("OPENALEX_TIMEOUT", "12"))
+    openalex_api_key = os.getenv("OPENALEX_API_KEY", "").strip()
+    max_results = limit if limit is not None else default_max_results
     remaining = max_results if max_results is not None else float("inf")
 
     params: Dict[str, str] = {
         "per-page": str(min(MAX_PER_PAGE, int(remaining))) if remaining != float("inf") else str(MAX_PER_PAGE),
         "sort": "relevance_score:desc",
         "cursor": "*",
-        "mailto": os.getenv("OPENALEX_MAILTO", "scholarrag@example.com"),
     }
+    if openalex_api_key:
+        params["api_key"] = openalex_api_key
     filter_expr = _build_filter(query, year_from, year_to)
     if filter_expr:
         params["filter"] = filter_expr
@@ -92,7 +96,7 @@ def fetch_candidates_from_openalex(
         response = None
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                response = session.get(OPENALEX_BASE_URL, params=params, timeout=REQUEST_TIMEOUT)
+                response = session.get(OPENALEX_BASE_URL, params=params, timeout=request_timeout)
                 response.raise_for_status()
                 break
             except requests.RequestException as exc:
@@ -132,6 +136,7 @@ def fetch_candidates_from_openalex(
                     "concepts": [c.get("display_name") for c in work.get("concepts", [])],
                     "abstract": abstract,
                     "authors": authors,
+                    "source": "openalex",
                 }
             )
             remaining -= 1

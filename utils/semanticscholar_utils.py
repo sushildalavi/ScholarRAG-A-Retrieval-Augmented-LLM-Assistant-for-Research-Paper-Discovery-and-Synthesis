@@ -10,10 +10,7 @@ logger = logging.getLogger(__name__)
 
 S2_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 # Keep default small to reduce 429s if no API key
-S2_MAX = int(os.getenv("S2_MAX_RESULTS", "20")) or 20
 S2_FIELDS = "title,year,abstract,externalIds,authors,venue,fieldsOfStudy,url"
-S2_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
-REQUEST_TIMEOUT = float(os.getenv("S2_TIMEOUT", "10"))
 MAX_RETRIES = 3
 
 
@@ -22,7 +19,10 @@ def _backoff(attempt: int) -> float:
 
 
 def fetch_from_s2(query: str, limit: Optional[int] = None, year_from: Optional[int] = None, year_to: Optional[int] = None) -> List[Dict]:
-    remaining = limit if limit is not None else S2_MAX
+    s2_max = int(os.getenv("S2_MAX_RESULTS", "20")) or 20
+    s2_api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
+    request_timeout = float(os.getenv("S2_TIMEOUT", "10"))
+    remaining = limit if limit is not None else s2_max
     if remaining <= 0:
         return []
     params: Dict[str, str] = {
@@ -31,11 +31,11 @@ def fetch_from_s2(query: str, limit: Optional[int] = None, year_from: Optional[i
         "fields": S2_FIELDS,
     }
     headers = {}
-    if S2_API_KEY:
-        headers["x-api-key"] = S2_API_KEY
+    if s2_api_key:
+        headers["x-api-key"] = s2_api_key
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = requests.get(S2_URL, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
+            resp = requests.get(S2_URL, params=params, headers=headers, timeout=request_timeout)
             if resp.status_code == 429:
                 # Too many requests: back off more aggressively
                 sleep_for = min(2 ** attempt + random.random(), 12.0)

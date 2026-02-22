@@ -9,9 +9,6 @@ import requests
 logger = logging.getLogger(__name__)
 
 ELSEVIER_URL = "https://api.elsevier.com/content/search/sciencedirect"
-ELSEVIER_KEY = os.getenv("ELSEVIER_API_KEY")
-ELSEVIER_MAX = int(os.getenv("ELSEVIER_MAX_RESULTS", "30")) or 30
-REQUEST_TIMEOUT = float(os.getenv("ELSEVIER_TIMEOUT", "10"))
 MAX_RETRIES = 3
 
 
@@ -20,10 +17,13 @@ def _backoff(attempt: int) -> float:
 
 
 def fetch_from_elsevier(query: str, limit: Optional[int] = None, year_from: Optional[int] = None, year_to: Optional[int] = None) -> List[Dict]:
-    if not ELSEVIER_KEY:
+    elsevier_key = os.getenv("ELSEVIER_API_KEY")
+    elsevier_max = int(os.getenv("ELSEVIER_MAX_RESULTS", "30")) or 30
+    request_timeout = float(os.getenv("ELSEVIER_TIMEOUT", "10"))
+    if not elsevier_key:
         logger.debug("ELSEVIER_API_KEY not set; skipping Elsevier fetch.")
         return []
-    remaining = limit if limit is not None else ELSEVIER_MAX
+    remaining = limit if limit is not None else elsevier_max
     if remaining <= 0:
         return []
     params: Dict[str, str] = {
@@ -31,11 +31,11 @@ def fetch_from_elsevier(query: str, limit: Optional[int] = None, year_from: Opti
         "count": str(remaining),
         "httpAccept": "application/json",
     }
-    headers = {"X-ELS-APIKey": ELSEVIER_KEY}
+    headers = {"X-ELS-APIKey": elsevier_key}
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = requests.get(ELSEVIER_URL, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
+            resp = requests.get(ELSEVIER_URL, params=params, headers=headers, timeout=request_timeout)
             resp.raise_for_status()
             data = resp.json()
             entries = data.get("search-results", {}).get("entry", []) or []

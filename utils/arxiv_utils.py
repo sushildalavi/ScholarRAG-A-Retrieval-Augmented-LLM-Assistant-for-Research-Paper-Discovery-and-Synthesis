@@ -10,7 +10,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-ARXIV_API = "https://export.arxiv.org/api/query"
+ARXIV_API = os.getenv("ARXIV_API_URL", "https://export.arxiv.org/api/query")
 ARXIV_PAGE_SIZE = 50  # keep pages small to reduce 429s
 ARXIV_MAX_RESULTS = int(os.getenv("ARXIV_MAX_RESULTS", "50")) or 50
 ARXIV_TIMEOUT = float(os.getenv("ARXIV_TIMEOUT", "12"))
@@ -114,6 +114,7 @@ def fetch_arxiv_candidates(
                     "authors": [{"display_name": a} for a in authors if a],
                     "concepts": [c for c in concept_tags if c],
                     "url": link.attrib.get("href") if link is not None else None,
+                    "source": "arxiv",
                 }
             )
             remaining -= 1

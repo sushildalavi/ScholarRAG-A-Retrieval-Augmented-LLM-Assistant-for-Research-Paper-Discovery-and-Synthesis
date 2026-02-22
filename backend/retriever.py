@@ -35,11 +35,11 @@ from utils.ieee_utils import fetch_from_ieee
 # Tighter defaults to improve latency and avoid slow/blocked sources by default.
 OPENALEX_FALLBACK_LIMIT = int(os.getenv("OPENALEX_FALLBACK_LIMIT", "20")) or 20
 ARXIV_FALLBACK_LIMIT = int(os.getenv("ARXIV_FALLBACK_LIMIT", "20")) or 20
-S2_FALLBACK_LIMIT = int(os.getenv("S2_FALLBACK_LIMIT", "0")) or 0
+S2_FALLBACK_LIMIT = int(os.getenv("S2_FALLBACK_LIMIT", "10")) or 10
 CROSSREF_FALLBACK_LIMIT = int(os.getenv("CROSSREF_FALLBACK_LIMIT", "20")) or 20
 SPRINGER_FALLBACK_LIMIT = int(os.getenv("SPRINGER_FALLBACK_LIMIT", "10")) or 10
-ELSEVIER_FALLBACK_LIMIT = int(os.getenv("ELSEVIER_FALLBACK_LIMIT", "0")) or 0
-IEEE_FALLBACK_LIMIT = int(os.getenv("IEEE_FALLBACK_LIMIT", "0")) or 0
+ELSEVIER_FALLBACK_LIMIT = int(os.getenv("ELSEVIER_FALLBACK_LIMIT", "10")) or 10
+IEEE_FALLBACK_LIMIT = int(os.getenv("IEEE_FALLBACK_LIMIT", "10")) or 10
 MULTI_HOP_MAX = int(os.getenv("MULTI_HOP_MAX", "2"))
 logger = logging.getLogger(__name__)
 

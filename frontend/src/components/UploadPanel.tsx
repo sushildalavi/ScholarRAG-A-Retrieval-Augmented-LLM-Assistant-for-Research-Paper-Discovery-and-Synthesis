@@ -33,7 +33,7 @@ export function UploadPanel({ onUploaded }: Props) {
         onDragLeave={() => setDragOver(false)}
         onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
       >
-        <div className="drop-icon">📄</div>
+        <div className="drop-icon" aria-hidden="true" />
         <div className="drop-text">Drag research PDFs here, or <span className="highlight">browse</span>.</div>
         <input type="file" accept=".pdf,.txt,.md,text/plain,application/pdf,text/markdown" multiple onChange={(e) => handleFiles(e.target.files)} />
       </div>

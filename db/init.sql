@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
 CREATE TABLE IF NOT EXISTS documents (
     id SERIAL PRIMARY KEY,
     title TEXT NOT NULL,
+    doc_type TEXT DEFAULT 'other',
     source_path TEXT,
     mime_type TEXT,
     pages INT,
@@ -113,3 +114,17 @@ CREATE TABLE IF NOT EXISTS chat_uploads (
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_chat_uploads_session ON chat_uploads(session_id);
+
+-- --- Evaluation runs ---
+CREATE TABLE IF NOT EXISTS eval_runs (
+    id SERIAL PRIMARY KEY,
+    name TEXT,
+    scope TEXT DEFAULT 'uploaded',
+    k INT DEFAULT 10,
+    case_count INT DEFAULT 0,
+    metrics_retrieval_only JSONB,
+    metrics_retrieval_rerank JSONB,
+    latency_breakdown JSONB,
+    details JSONB,
+    created_at TIMESTAMP DEFAULT now()
+);

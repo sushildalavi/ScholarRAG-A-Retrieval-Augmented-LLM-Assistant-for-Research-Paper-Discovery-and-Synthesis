@@ -34,8 +34,9 @@ storage/
 
 # Frontend (Vite/React)
 node_modules/
-frontend-react/node_modules/
-frontend-react/dist/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
 
 # Legacy artifacts
 ScholarRAG/

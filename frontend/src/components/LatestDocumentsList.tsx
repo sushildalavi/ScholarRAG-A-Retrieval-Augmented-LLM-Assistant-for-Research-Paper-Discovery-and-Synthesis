@@ -21,14 +21,14 @@ export function LatestDocumentsList({ documents, selectedId, onSelect, onDelete 
             key={d.id}
             className={`library-item ${selectedId === d.id ? 'selected' : ''}`}
           >
-            <div className="lib-icon" onClick={() => onSelect(selectedId === d.id ? null : d.id)}>📄</div>
+            <div className="lib-icon" aria-hidden="true" onClick={() => onSelect(selectedId === d.id ? null : d.id)} />
             <div className="lib-meta" onClick={() => onSelect(selectedId === d.id ? null : d.id)}>
               <div className="lib-title" title={d.title}>{d.title}</div>
               <div className="lib-status">
                 <span className={`badge ${statusClass}`}>{statusText}</span>
               </div>
             </div>
-            <button className="lib-delete" title="Delete" onClick={() => onDelete(d.id)}>🗑</button>
+            <button className="lib-delete" title="Delete" onClick={() => onDelete(d.id)}>×</button>
           </div>
         );
       })}

@@ -1,3 +1,4 @@
+import os
 from typing import Dict, List, Tuple
 
 from openai import OpenAI
@@ -26,7 +27,7 @@ def synthesize_answer(query: str, docs: List[Dict]) -> Dict[str, Dict]:
     contexts, _ = build_contexts(docs)
     prompt = build_user_prompt(query, contexts)
     resp = _client().chat.completions.create(
-        model="gpt-4o-mini",
+        model=RESEARCH_CHAT_MODEL,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
@@ -38,3 +39,4 @@ def synthesize_answer(query: str, docs: List[Dict]) -> Dict[str, Dict]:
         "answer": resp.choices[0].message.content,
         "usage": usage,
     }
+RESEARCH_CHAT_MODEL = os.getenv("RESEARCH_CHAT_MODEL", "gpt-4o-mini")

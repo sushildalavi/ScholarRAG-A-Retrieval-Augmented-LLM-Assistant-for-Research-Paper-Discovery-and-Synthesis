@@ -20,6 +20,14 @@ STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md"}
 ALLOWED_MIME_PREFIXES = ("text/",)
 ALLOWED_EXACT_MIME = {"application/pdf"}
+DOC_TYPES = {"resume", "research_paper", "official_doc", "assignment", "notes", "other"}
+
+
+def _ensure_doc_type_schema() -> None:
+    execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_type TEXT DEFAULT 'other'")
+
+
+_ensure_doc_type_schema()
 
 
 def _hash_bytes(data: bytes) -> str:
@@ -70,6 +78,21 @@ def _is_supported_upload(filename: str, mime: str) -> bool:
     return any(mime.startswith(prefix) for prefix in ALLOWED_MIME_PREFIXES)
 
 
+def _infer_doc_type(name: str) -> str:
+    n = (name or "").lower()
+    if any(k in n for k in ("resume", "cv", "curriculum vitae", "bio")):
+        return "resume"
+    if any(k in n for k in ("assignment", "homework", "problem set", "pset")):
+        return "assignment"
+    if any(k in n for k in ("notes", "lecture", "slides")):
+        return "notes"
+    if any(k in n for k in ("policy", "report", "spec", "manual", "company profile", "official")):
+        return "official_doc"
+    if any(k in n for k in ("paper", "arxiv", "ieee", "acm", "journal", "conference")):
+        return "research_paper"
+    return "other"
+
+
 def _embed_and_store_chunks(document_id: int, chunks: List[Tuple[int, int, str]]) -> int:
     clean_chunks: List[Tuple[int, int, str]] = []
     for page_no, chunk_idx, text in chunks:
@@ -109,7 +132,7 @@ def list_documents():
     # Show unique titles (best-effort) ordered by recency
     docs = fetchall(
         """
-        SELECT DISTINCT ON (title) id, title, status, pages, bytes, created_at
+        SELECT DISTINCT ON (title) id, title, status, doc_type, pages, bytes, created_at
         FROM documents
         ORDER BY title, created_at DESC
         LIMIT 100
@@ -121,7 +144,7 @@ def list_documents():
 @router.get("/latest")
 def latest_documents(limit: int = 10):
     docs = fetchall(
-        "SELECT id, title, status, pages, bytes, created_at FROM documents ORDER BY created_at DESC LIMIT %s",
+        "SELECT id, title, status, doc_type, pages, bytes, created_at FROM documents ORDER BY created_at DESC LIMIT %s",
         [limit],
     )
     return {"documents": docs}
@@ -145,13 +168,14 @@ async def upload_document(file: UploadFile = File(...), title: Optional[str] = N
 
     sha = _hash_bytes(data)
 
+    inferred_doc_type = _infer_doc_type(title or file.filename or "")
     doc_row = fetchone(
         """
-        INSERT INTO documents (title, source_path, mime_type, bytes, hash_sha256, status)
-        VALUES (%s, %s, %s, %s, %s, 'processing')
+        INSERT INTO documents (title, source_path, mime_type, bytes, hash_sha256, status, doc_type)
+        VALUES (%s, %s, %s, %s, %s, 'processing', %s)
         RETURNING id
         """,
-        [title or file.filename, str(fpath), mime, len(data), sha],
+        [title or file.filename, str(fpath), mime, len(data), sha, inferred_doc_type],
     )
     doc_id = doc_row["id"]
 
@@ -218,10 +242,11 @@ def search_chunks(payload: dict = None, q: str = None, k: int = 10, doc_id: Opti
         params.append(doc_id)
     rows = fetchall(
         f"""
-        SELECT chunks.id, chunks.document_id, chunks.text, chunks.page_no, chunks.chunk_index,
+        SELECT chunks.id, chunks.document_id, documents.title, documents.doc_type, chunks.text, chunks.page_no, chunks.chunk_index,
                chunk_embeddings.vector <-> %s::vector AS distance
         FROM chunk_embeddings
         JOIN chunks ON chunk_embeddings.chunk_id = chunks.id
+        JOIN documents ON documents.id = chunks.document_id
         {where}
         ORDER BY distance ASC
         LIMIT {int(k)}
@@ -242,6 +267,15 @@ def delete_document(doc_id: int):
     execute("DELETE FROM chat_uploads WHERE doc_id=%s", [doc_id])
     execute("DELETE FROM documents WHERE id=%s", [doc_id])
     return {"ok": True, "document_id": doc_id}
+
+
+@router.put("/{doc_id}/type")
+def update_document_type(doc_id: int, payload: dict):
+    doc_type = (payload.get("doc_type") or "").strip().lower()
+    if doc_type not in DOC_TYPES:
+        raise HTTPException(status_code=400, detail=f"doc_type must be one of {sorted(DOC_TYPES)}")
+    execute("UPDATE documents SET doc_type=%s WHERE id=%s", [doc_type, doc_id])
+    return {"ok": True, "document_id": doc_id, "doc_type": doc_type}
 
 
 @router.post("/qa")

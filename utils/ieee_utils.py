@@ -9,9 +9,6 @@ import requests
 logger = logging.getLogger(__name__)
 
 IEEE_URL = "https://ieeexploreapi.ieee.org/api/v1/search/articles"
-IEEE_KEY = os.getenv("IEEE_API_KEY")
-IEEE_MAX = int(os.getenv("IEEE_MAX_RESULTS", "30")) or 30
-REQUEST_TIMEOUT = float(os.getenv("IEEE_TIMEOUT", "10"))
 MAX_RETRIES = 3
 
 
@@ -20,15 +17,18 @@ def _backoff(attempt: int) -> float:
 
 
 def fetch_from_ieee(query: str, limit: Optional[int] = None, year_from: Optional[int] = None, year_to: Optional[int] = None) -> List[Dict]:
-    if not IEEE_KEY:
+    ieee_key = os.getenv("IEEE_API_KEY")
+    ieee_max = int(os.getenv("IEEE_MAX_RESULTS", "30")) or 30
+    request_timeout = float(os.getenv("IEEE_TIMEOUT", "10"))
+    if not ieee_key:
         logger.debug("IEEE_API_KEY not set; skipping IEEE fetch.")
         return []
-    remaining = limit if limit is not None else IEEE_MAX
+    remaining = limit if limit is not None else ieee_max
     if remaining <= 0:
         return []
     params: Dict[str, str] = {
         "querytext": query,
-        "apikey": IEEE_KEY,
+        "apikey": ieee_key,
         "max_records": str(remaining),
         "sort_order": "desc",
         "sort_field": "publication_year",
@@ -40,7 +40,7 @@ def fetch_from_ieee(query: str, limit: Optional[int] = None, year_from: Optional
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = requests.get(IEEE_URL, params=params, timeout=REQUEST_TIMEOUT)
+            resp = requests.get(IEEE_URL, params=params, timeout=request_timeout)
             resp.raise_for_status()
             data = resp.json()
             articles = data.get("articles", []) or []
