@@ -33,9 +33,13 @@ from utils.logging_utils import setup_file_logger, log_json
 from backend.public_search import public_live_search
 from backend.public_web import public_web_search
 from backend.services.db import fetchall, fetchone, execute
-from backend.confidence import build_confidence
+from backend.services.nli import entailment_prob
+from backend.services.judge import aggregate_judge_report, evaluate_faithfulness
+from backend.confidence import build_confidence, score_percent
 from backend.eval_metrics import aggregate_metrics
 from backend.sense_resolver import resolve_sense, filter_citations_by_sense
+import hashlib
+import statistics
 
 # Initialize FastAPI app
 app = FastAPI(title="ScholarRAG API", version="1.0")
@@ -80,7 +84,74 @@ def _ensure_eval_schema() -> None:
     )
 
 
+def _ensure_msa_schema() -> None:
+    execute(
+        """
+        CREATE TABLE IF NOT EXISTS confidence_calibration (
+            id SERIAL PRIMARY KEY,
+            model_name TEXT DEFAULT 'msa_logistic_v1',
+            label TEXT DEFAULT 'default',
+            weights JSONB NOT NULL,
+            metrics JSONB,
+            dataset_size INT DEFAULT 0,
+            created_at TIMESTAMP DEFAULT now()
+        )
+        """
+    )
+    execute(
+        """
+        CREATE TABLE IF NOT EXISTS evidence_scores (
+            id SERIAL PRIMARY KEY,
+            request_id TEXT,
+            sentence_id INT,
+            citation_id INT,
+            evidence_id TEXT,
+            m_score REAL,
+            s_score REAL,
+            a_score REAL,
+            score REAL,
+            created_at TIMESTAMP DEFAULT now()
+        )
+        """
+    )
+    execute(
+        """
+        CREATE TABLE IF NOT EXISTS evaluation_judge_runs (
+            id SERIAL PRIMARY KEY,
+            scope TEXT DEFAULT 'uploaded',
+            query_count INT DEFAULT 0,
+            metrics JSONB,
+            details JSONB,
+            created_at TIMESTAMP DEFAULT now()
+        )
+        """
+    )
+
+
 _ensure_eval_schema()
+_ensure_msa_schema()
+
+
+def _load_latest_calibration_weights() -> dict:
+    row = fetchone(
+        """
+        SELECT weights
+        FROM confidence_calibration
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+    )
+    if not row:
+        return {"w1": 0.58, "w2": 0.22, "w3": 0.20, "b": 0.0}
+    weights = row.get("weights") or {}
+    if not isinstance(weights, dict):
+        return {"w1": 0.58, "w2": 0.22, "w3": 0.20, "b": 0.0}
+    return {
+        "w1": float(weights.get("w1", 0.58)),
+        "w2": float(weights.get("w2", 0.22)),
+        "w3": float(weights.get("w3", 0.20)),
+        "b": float(weights.get("b", 0.0)),
+    }
 
 
 def _clamp01(x: float) -> float:
@@ -268,6 +339,26 @@ def _build_public_evidence_fallback(query: str, citations: list[dict]) -> str:
     return (
         "I found relevant public research sources for your query. "
         "Here are the strongest matches from the retrieved evidence:\n"
+        + "\n".join(lines)
+    )
+
+
+def _build_uploaded_related_work_fallback(citations: list[dict]) -> str:
+    if not citations:
+        return "I couldn’t find related-work evidence in your uploaded paper."
+    lines = []
+    for i, c in enumerate(citations[:5], start=1):
+        title = c.get("title") or f"Document {c.get('doc_id', '?')}"
+        page = c.get("page")
+        snippet = re.sub(r"\s+", " ", (c.get("snippet") or "").strip())[:220]
+        header = f"{title} (p.{page})" if page is not None else title
+        if snippet:
+            lines.append(f"- {header}: {snippet} [S{i}]")
+        else:
+            lines.append(f"- {header} [S{i}]")
+    return (
+        "I found related/prior-work evidence in your uploaded paper. "
+        "Here are the most relevant excerpts:\n"
         + "\n".join(lines)
     )
 
@@ -511,6 +602,10 @@ def _is_definition_style_query(query: str) -> bool:
     q = (query or "").strip().lower()
     if not q:
         return False
+    # Doc-grounded requests like "tell me about this uploaded paper" are not
+    # generic definition/company queries.
+    if _is_doc_intent_query(q):
+        return False
     starters = ("what is", "who is", "tell me about", "explain", "define")
     return q.startswith(starters) or " company" in q
 
@@ -549,11 +644,35 @@ def _is_general_knowledge_query(query: str) -> bool:
     return any(c in q for c in cues)
 
 
+def _is_related_work_query(query: str) -> bool:
+    q = (query or "").lower()
+    cues = (
+        "related work",
+        "similar work",
+        "similar papers",
+        "relevant work",
+        "prior work",
+        "literature review",
+        "baseline papers",
+        "closest papers",
+        "papers similar",
+    )
+    return any(c in q for c in cues)
+
+
 def _is_company_intent_query(query: str) -> bool:
     q = (query or "").lower()
-    company_cues = (" inc", " llc", " ltd", " corp", " company", " solutions", " technologies", " systems")
-    question_cues = ("what is", "tell me", "about", "overview", "background")
-    return any(c in q for c in company_cues) or any(c in q for c in question_cues)
+    if _is_doc_intent_query(q):
+        return False
+    company_cues = (
+        " inc", " llc", " ltd", " corp", " company", " co.", " corporation",
+        " technologies", " systems", " holdings", " group", " enterprises",
+    )
+    business_intent_cues = (
+        "company overview", "about the company", "what company", "what does",
+        "headquartered", "ticker", "founded", "market cap", "industry",
+    )
+    return any(c in q for c in company_cues) or any(c in q for c in business_intent_cues)
 
 
 def _requested_public_source(query: str) -> str | None:
@@ -589,6 +708,8 @@ def _is_entity_level_query(query: str) -> bool:
     q = (query or "").strip().lower()
     if not q:
         return False
+    if _is_doc_intent_query(q):
+        return False
     patterns = (
         r"^tell me about\s+[a-z0-9 .,&-]+$",
         r"^what is\s+[a-z0-9 .,&-]+\??$",
@@ -597,10 +718,68 @@ def _is_entity_level_query(query: str) -> bool:
     )
     has_pattern = any(re.match(p, q) for p in patterns)
     tokens = re.findall(r"[a-z0-9]+", q)
-    short_entity_like = 1 <= len(tokens) <= 6
+    # Keep this conservative to avoid false positives on normal doc questions.
+    short_entity_like = 1 <= len(tokens) <= 3
     role_terms = {"worked", "experience", "did", "role", "intern", "resume", "cv", "my"}
+    research_terms = {"paper", "research", "study", "method", "results", "abstract", "dataset", "uploaded", "attached", "document", "docs"}
     has_role_intent = any(t in tokens for t in role_terms)
-    return (has_pattern or short_entity_like or _is_company_intent_query(q)) and not has_role_intent
+    has_research_intent = any(t in tokens for t in research_terms)
+    return (has_pattern or short_entity_like or _is_company_intent_query(q)) and not has_role_intent and not has_research_intent
+
+
+def _is_uploaded_doc_summary_query(query: str) -> bool:
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    cues = (
+        "attached research paper",
+        "attached paper",
+        "uploaded paper",
+        "uploaded research paper",
+        "this paper",
+        "that paper",
+        "my paper",
+        "summarize the paper",
+        "summary of the paper",
+        "tell me about the attached",
+        "tell me about this document",
+    )
+    return any(c in q for c in cues)
+
+
+def _resolve_effective_doc_id(doc_id: int | None, scope: str, query: str) -> int | None:
+    """
+    In uploaded scope, bind doc-intent queries to a specific ready document
+    if the caller did not select one explicitly.
+    """
+    if scope != "uploaded" or doc_id is not None:
+        return doc_id
+
+    rows = fetchall(
+        """
+        SELECT id, title
+        FROM documents
+        WHERE status='ready'
+        ORDER BY created_at DESC
+        LIMIT 20
+        """
+    )
+    if not rows:
+        return None
+    if len(rows) == 1:
+        return rows[0].get("id")
+
+    q = (query or "").lower()
+    # If user references a specific file name in the prompt, bind to it.
+    for r in rows:
+        title = (r.get("title") or "").lower()
+        if title and (title in q or Path(title).stem in q):
+            return r.get("id")
+
+    # For explicit doc-summary intent, default to the most recently uploaded doc.
+    if _is_doc_intent_query(q) or _is_uploaded_doc_summary_query(q):
+        return rows[0].get("id")
+    return None
 
 
 def _needs_scope_limited_answer(query: str, citations: list[dict]) -> bool:
@@ -687,8 +866,13 @@ def _rank_and_trim_citations(query: str, citations: list[dict], k: int, prefer_p
         ranked.append(cc)
     ranked.sort(key=lambda x: x.get("_rel", 0.0), reverse=True)
     top = ranked[0].get("_rel", 0.0)
-    threshold = max(0.10, top - 0.25)
+    q = (query or "").lower()
+    list_intent = any(t in q for t in ("papers", "paper", "studies", "references", "sources", "literature", "survey"))
+    threshold = max(0.02, top - 0.45) if list_intent else max(0.10, top - 0.25)
+    min_keep = min(max(1, k), 8 if list_intent else 3)
     kept = [c for c in ranked if c.get("_rel", 0.0) >= threshold][: max(1, k)]
+    if len(kept) < min_keep:
+        kept = ranked[:min_keep]
     if not kept:
         kept = ranked[: max(1, k)]
 
@@ -702,6 +886,216 @@ def _rank_and_trim_citations(query: str, citations: list[dict], k: int, prefer_p
     for c in kept:
         c.pop("_rel", None)
     return kept
+
+
+def _build_evidence_id(citation: dict) -> str:
+    if (citation.get("source") or "") == "uploaded":
+        doc_id = citation.get("doc_id")
+        chunk_id = citation.get("chunk_id")
+        page = citation.get("page")
+        return f"uploaded:{doc_id}:{chunk_id}:{page}"
+
+    source = (citation.get("source") or "public").lower()
+    doi = (citation.get("url") or "").replace("https://doi.org/", "").replace("http://doi.org/", "")
+    title = (citation.get("title") or "").lower()
+    year = citation.get("year")
+    base = doi or title or source
+    return f"{source}:{base}:{year or ''}"
+
+
+def _split_answer_sentences(answer: str) -> list[str]:
+    if not answer:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+", answer.strip())
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _extract_sentence_citation_ids(sentence: str) -> list[int]:
+    ids = []
+    for m in re.finditer(r"\[S(\d+)\]", sentence):
+        try:
+            ids.append(int(m.group(1)))
+        except Exception:
+            continue
+    return ids
+
+
+def _stability_lookup_uploaded(q: str, k: int, doc_id: int | None, perturb: bool = False) -> set[str]:
+    query = q if q else ""
+    if perturb:
+        query = (query + " methods overview").strip()
+    results = search_uploaded_chunks(query, k=k, doc_id=doc_id).get("results", []) if query else []
+    out = set()
+    for r in results:
+        c = {
+            "source": "uploaded",
+            "doc_id": r.get("document_id"),
+            "chunk_id": r.get("id"),
+            "page": r.get("page_no"),
+        }
+        out.add(_build_evidence_id(c))
+    return out
+
+
+def _stability_lookup_public(q: str, k: int, source_only: str | None = None, perturb: bool = False) -> set[str]:
+    query = q if q else ""
+    if perturb:
+        query = (query + " methods").strip() if query else ""
+        query = query.strip()
+    papers = public_live_search(query, k=k, source_only=source_only) if query else []
+    out = set()
+    for p in papers:
+        citation = {
+            "source": p.get("source") or p.get("venue") or "public",
+            "title": p.get("title"),
+            "year": p.get("year"),
+            "url": _normalize_source_url(p.get("url") or p.get("doi")),
+        }
+        out.add(_build_evidence_id(citation))
+    return out
+
+
+def _compute_stability_scores(query: str, k: int, scope: str, doc_id: int | None = None, source_only: str | None = None) -> dict[str, float]:
+    if not query:
+        return {}
+
+    run_sets: list[set[str]] = []
+    if scope == "uploaded":
+        run_sets.append(_stability_lookup_uploaded(query, k, doc_id, perturb=False))
+        run_sets.append(_stability_lookup_uploaded((query + " " + "related"), k, doc_id, perturb=True))
+        run_sets.append(_stability_lookup_uploaded((query + " " + "overview"), k, doc_id, perturb=True))
+        if doc_id is not None:
+            run_sets.append(_stability_lookup_uploaded(query, k, None, perturb=False))
+    else:
+        run_sets.append(_stability_lookup_public(query, k, source_only=source_only, perturb=False))
+        run_sets.append(_stability_lookup_public((query + " related"), k, source_only=source_only, perturb=True))
+        run_sets.append(_stability_lookup_public((query + " 2024"), k, source_only=source_only, perturb=True))
+        run_sets.append(_stability_lookup_public((query + " survey"), k, source_only=source_only, perturb=True))
+
+    runs = max(1, len(run_sets))
+    seen: dict[str, int] = {}
+    for ids in run_sets:
+        for evidence_id in ids:
+            seen[evidence_id] = seen.get(evidence_id, 0) + 1
+
+    return {eid: count / float(runs) for eid, count in seen.items()}
+
+
+def _compute_agreement_score(sentence: str, context_map: dict[int, dict], evidence_id: str) -> float:
+    # compare across top evidence snippets from distinct source/doc keys
+    if not sentence:
+        return 0.0
+    if not context_map:
+        return 0.0
+
+    # Evaluate a small set excluding current evidence if needed.
+    candidates = []
+    for c in context_map.values():
+        text = c.get("snippet") or c.get("title") or ""
+        if not text:
+            continue
+        src = c.get("doc_id") or c.get("source") or c.get("title") or c.get("chunk_id")
+        candidates.append((src, text))
+
+    if not candidates:
+        return 0.0
+
+    # distinct source estimate
+    by_source = []
+    seen = set()
+    for src, text in candidates:
+        if src in seen:
+            continue
+        seen.add(src)
+        by_source.append(text)
+        if len(by_source) >= 6:
+            break
+
+    support = 0
+    total = max(1, len(by_source))
+    for text in by_source:
+        if entailment_prob(sentence, text) >= 0.70:
+            support += 1
+
+    return round(support / total, 4)
+
+
+def _compute_citation_msa(
+    query: str,
+    answer: str,
+    citations: list[dict],
+    scope: str,
+    k: int,
+    doc_id: int | None = None,
+    source_only: str | None = None,
+) -> tuple[dict[int, dict], int]:
+    stability = _compute_stability_scores(query, k=max(k, 8), scope=scope, doc_id=doc_id, source_only=source_only)
+
+    context_by_id: dict[int, dict] = {}
+    for idx, c in enumerate(citations, start=1):
+        context_by_id[idx] = {
+            "evidence_id": c.get("evidence_id"),
+            "snippet": c.get("snippet", ""),
+            "source": c.get("source"),
+            "doc_id": c.get("doc_id"),
+            "chunk_id": c.get("chunk_id"),
+        }
+
+    sentence_rows: list[dict] = []
+    unsupported = 0
+    for sidx, sentence in enumerate(_split_answer_sentences(answer), start=1):
+        cleaned_sentence = re.sub(r"\[(?:S)?(\d+)\]", "", sentence).strip()
+        if not cleaned_sentence:
+            continue
+        cited = _extract_sentence_citation_ids(sentence)
+        if not cited:
+            unsupported += 1
+            continue
+        for cidx in cited:
+            cmeta = context_by_id.get(cidx)
+            if not cmeta:
+                unsupported += 1
+                continue
+            evidence_id = cmeta.get("evidence_id") or f"sentence-{sidx}-citation-{cidx}"
+            m = round(entailment_prob(cleaned_sentence, cmeta.get("snippet", "")), 4)
+            s = round(float(stability.get(evidence_id, 0.0)), 4)
+            a = round(_compute_agreement_score(sentence, context_by_id, evidence_id), 4)
+
+            sentence_rows.append(
+                {
+                    "sentence_id": sidx,
+                    "citation_id": cidx,
+                    "evidence_id": evidence_id,
+                    "M": m,
+                    "S": s,
+                    "A": a,
+                    "msa_score": build_confidence(
+                        top_sim=0.0,
+                        top_rerank_norm=0.0,
+                        citation_coverage=0.0,
+                        evidence_margin=0.0,
+                        ambiguity_penalty=0.0,
+                        insufficiency_penalty=0.0,
+                        msa={"M": m, "S": s, "A": a, "weights": _load_latest_calibration_weights()},
+                    )["factors"].get("msa", {}).get("msa_score", 0.0),
+                }
+            )
+
+    # Persist evidence scores (best effort, non-blocking)
+    request_id = hashlib.md5((query + answer).encode("utf-8")).hexdigest()
+    for row in sentence_rows:
+        try:
+            execute(
+                """
+                INSERT INTO evidence_scores (request_id, sentence_id, citation_id, evidence_id, m_score, s_score, a_score, score)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                [request_id, row.get("sentence_id"), row.get("citation_id"), row.get("evidence_id"), row.get("M"), row.get("S"), row.get("A"), row.get("msa_score")],
+            )
+        except Exception:
+            pass
+
+    return {int(r.get("citation_id", 0)): {"M": r.get("M"), "S": r.get("S"), "A": r.get("A") , "msa_score": r.get("msa_score")} for r in sentence_rows}, unsupported
 
 
 @app.get("/favicon.ico")
@@ -759,11 +1153,16 @@ def metrics():
 def assistant_answer(
     payload: dict = Body(
         ...,
-        example={
-            "query": "What does the paper really address?",
-            "scope": "uploaded",
-            "doc_id": None,
-            "k": 10,
+        examples={
+            "default": {
+                "summary": "Default assistant query payload",
+                "value": {
+                    "query": "What does the paper really address?",
+                    "scope": "uploaded",
+                    "doc_id": None,
+                    "k": 10,
+                },
+            }
         },
     )
 ):
@@ -776,9 +1175,15 @@ def assistant_answer(
     query = payload.get("query") or ""
     scope = payload.get("scope") or "uploaded"
     doc_id = payload.get("doc_id")
+    try:
+        doc_id = int(doc_id) if doc_id is not None else None
+    except Exception:
+        doc_id = None
     k = int(payload.get("k") or 10)
     multi_hop = bool(payload.get("multi_hop"))
     debug_confidence = bool(payload.get("debug_confidence"))
+    run_judge = bool(payload.get("run_judge"))
+    run_judge_llm = bool(payload.get("run_judge_llm", True))
     allow_general_background = bool(payload.get("allow_general_background"))
     chosen_sense = payload.get("sense")
     compare_senses = bool(payload.get("compare_senses"))
@@ -787,7 +1192,14 @@ def assistant_answer(
         raise HTTPException(status_code=400, detail="query is required")
 
     qnorm = query.strip().lower()
+    doc_summary_intent = _is_uploaded_doc_summary_query(query)
+    related_work_intent = _is_related_work_query(query)
+    doc_id = _resolve_effective_doc_id(doc_id, scope, query)
     requested_public_source = _requested_public_source(query)
+    if related_work_intent and scope == "uploaded":
+        # Sense-comparison is not useful for related-work extraction from one paper.
+        compare_senses = False
+        chosen_sense = None
     # Heuristic routing: simple chat vs research
     small_talk_triggers = {"hi", "hello", "hey", "heyy", "sup", "ssup", "thanks", "thank you", "yo", "help", "how are you"}
     ui_help_actions = {"where", "how", "click", "button", "panel", "screen", "ui", "app"}
@@ -997,6 +1409,14 @@ def assistant_answer(
         else:
             citations.extend(fetch_context(query, "uploaded"))
 
+        # Dedicated recall boost for "related/similar work" requests on uploaded docs.
+        if related_work_intent:
+            related_probe = (
+                "related work prior work baseline comparison compared with previous studies "
+                "limitations future work " + query
+            )
+            citations.extend(fetch_context(related_probe, "uploaded"))
+
         if allow_general_background and (_is_general_knowledge_query(query) or _is_company_intent_query(query)):
             public_citations = fetch_context(query, "public")
             public_citations = _prune_public_citations(query, public_citations)
@@ -1058,7 +1478,7 @@ def assistant_answer(
             "citations": [],
         }
 
-    entity_query = _is_entity_level_query(query)
+    entity_query = _is_entity_level_query(query) and not doc_summary_intent
     all_personal_resume = all(
         ((c.get("doc_type") in {"resume"}) or (_source_scope(c) == "personal_profile"))
         for c in citations
@@ -1197,7 +1617,7 @@ def assistant_answer(
     rerank_ms = (time.perf_counter() - rerank_start) * 1000
 
     sense = resolve_sense(query, citations, chosen_sense=chosen_sense)
-    if sense.get("is_ambiguous") and not compare_senses and not chosen_sense:
+    if sense.get("is_ambiguous") and not compare_senses and not chosen_sense and not related_work_intent:
         return {
             "answer": "",
             "citations": [],
@@ -1242,7 +1662,7 @@ def assistant_answer(
     if chosen_sense and not compare_senses:
         citations = filter_citations_by_sense(citations, chosen_sense)
 
-    if _is_company_intent_query(query):
+    if _is_company_intent_query(query) and not doc_summary_intent:
         has_public = any((c.get("source") or "").lower() != "uploaded" for c in citations)
         has_profile = any((_source_scope(c) == "personal_profile") for c in citations)
         if has_profile and not has_public:
@@ -1298,6 +1718,7 @@ def assistant_answer(
         c["rank_before"] = before_rank
         c["rank_after"] = i
         c["rank_delta"] = before_rank - i
+        c["evidence_id"] = c.get("evidence_id") or _build_evidence_id(c)
         c["scope"] = _source_scope(c)
         c["rerank_raw"] = round(float(c.get("rerank_raw", _chunk_query_overlap(query, c)) or 0.0), 4)
         c["rerank_norm"] = round(float(c.get("rerank_norm", c.get("rerank_raw", 0.0)) or 0.0), 4)
@@ -1376,6 +1797,9 @@ def assistant_answer(
         if scope != "uploaded" and citations:
             answer = _build_public_evidence_fallback(query, citations)
             citation_coverage_par, unsupported_claims, paragraph_count = _citation_coverage_stats(answer)
+        elif scope == "uploaded" and related_work_intent and citations:
+            answer = _build_uploaded_related_work_fallback(citations)
+            citation_coverage_par, unsupported_claims, paragraph_count = _citation_coverage_stats(answer)
         else:
             evidence_label = _scope_evidence_label(scope)
             answer = (
@@ -1385,7 +1809,68 @@ def assistant_answer(
             # Do not present misleading evidence cards when answer is explicitly blocked.
             citations = []
     citations = _apply_usage_boost(citations, answer)
+    msa_by_citation: dict[int, dict] = {}
+    unsupported_by_msa = 0
+    if citations and (answer or "").strip():
+        msa_by_citation, unsupported_by_msa = _compute_citation_msa(
+            query,
+            answer,
+            citations,
+            scope=scope,
+            k=k,
+            doc_id=doc_id,
+            source_only=requested_public_source,
+        )
+
+    if msa_by_citation:
+        for c in citations:
+            cid = int(c.get("id") or 0)
+            msa = msa_by_citation.get(cid)
+            if not msa:
+                continue
+            msa_payload = {
+                "M": float(msa.get("M", 0.0)),
+                "S": float(msa.get("S", 0.0)),
+                "A": float(msa.get("A", 0.0)),
+                "weights": _load_latest_calibration_weights(),
+            }
+            c["msa"] = {
+                **msa_payload,
+                "msa_score": float(msa.get("msa_score", 0.0)),
+                "score_percent": score_percent(float(msa.get("msa_score", 0.0))),
+            }
+            c["msa_supported"] = bool(float(msa.get("M", 0.0)) >= 0.5)
+            if c.get("used_in_answer") and not c["msa_supported"]:
+                c["used_in_answer"] = False
+            c["confidence_obj"] = build_confidence(
+                top_sim=float(c.get("sim_score", 0.0) or 0.0),
+                top_rerank_norm=float(c.get("rerank_norm", 0.0) or 0.0),
+                citation_coverage=1.0 if c.get("used_in_answer") else 0.0,
+                evidence_margin=float(c.get("sim_score", 0.0) or 0.0),
+                ambiguity_penalty=0.0,
+                insufficiency_penalty=0.0,
+                scope_penalty=0.0,
+                msa=msa_payload,
+            )
+
+    if msa_by_citation and any(c.get("msa_supported") is False for c in citations):
+        unsupported_claims = max(unsupported_claims, unsupported_by_msa or unsupported_claims)
+
+    all_used_dropped = citations and all(not c.get("used_in_answer") for c in citations)
+    if all_used_dropped and answer.strip():
+        answer = (
+            "I could only retrieve potential evidence, but the extracted claims do not clear the M/S/A support threshold "
+            "for a citation-grounded answer. Please clarify the query or add more specific sources."
+        )
+        citation_coverage_par = 0.0
+        unsupported_claims = 1
+
     cited_count = sum(1 for c in citations if c.get("used_in_answer"))
+    if run_judge:
+        faithfulness = evaluate_faithfulness(query, answer, citations, use_llm=run_judge_llm)
+    else:
+        faithfulness = None
+
     avg_sim = (
         sum(float(c.get("sim_score", 0.0) or 0.0) for c in citations) / max(1, len(citations))
         if citations
@@ -1477,16 +1962,19 @@ def assistant_answer(
 
     citations_out = [{k: v for k, v in c.items() if k != "snippet"} for c in citations]
     for c in citations_out:
-        c["confidence_obj"] = build_confidence(
-            top_sim=float(c.get("sim_score", 0.0) or 0.0),
-            top_rerank_norm=float(c.get("rerank_norm", 0.0) or 0.0),
-            citation_coverage=1.0 if c.get("used_in_answer") else 0.0,
-            evidence_margin=float(c.get("sim_score", 0.0) or 0.0),
-            ambiguity_penalty=0.0,
-            insufficiency_penalty=0.0,
-            scope_penalty=0.0,
-            needs_clarification=False,
-        )
+        if "confidence_obj" not in c:
+            c["confidence_obj"] = build_confidence(
+                top_sim=float(c.get("sim_score", 0.0) or 0.0),
+                top_rerank_norm=float(c.get("rerank_norm", 0.0) or 0.0),
+                citation_coverage=1.0 if c.get("used_in_answer") else 0.0,
+                evidence_margin=float(c.get("sim_score", 0.0) or 0.0),
+                ambiguity_penalty=0.0,
+                insufficiency_penalty=0.0,
+                scope_penalty=0.0,
+                needs_clarification=False,
+            )
+        c["confidence"] = float(c.get("confidence", c["confidence_obj"].get("score", 0.0)) or 0.0)
+        c["confidence_percent"] = score_percent(float(c["confidence"]))
     if not debug_confidence:
         for c in citations_out:
             c.pop("_confidence_meta", None)
@@ -1511,9 +1999,13 @@ def assistant_answer(
         "clarification": None,
         "answer_scope": chosen_sense or ("compare_senses" if compare_senses else scope_label),
         "unsupported_claims": unsupported_claims,
+        "faithfulness": faithfulness if faithfulness is not None else None,
         "trust": trust,
         "latency_ms": latency_ms,
-        "confidence_note": "Confidence is heuristic, not a ground-truth probability. Use debug_confidence=true for per-source breakdown.",
+        "confidence_note": (
+            "Confidence is heuristic/derived from evidence retrieval, retrieval stability, and optional MSA calibration. "
+            "Use debug_confidence=true for per-source breakdown."
+        ),
         "why_answer": {
             "rerank_changed_order": rerank_changed,
             "top_chunks": trace_chunks,
@@ -1637,6 +2129,114 @@ def _eval_candidates_for_query(query: str, k: int) -> tuple[list[dict], list[dic
     return retrieval_only[:k], reranked[:k], {"retrieve_ms": round(retrieve_ms, 2), "rerank_ms": round(rerank_ms, 2)}
 
 
+def _judge_label_to_binary(label: object) -> int | None:
+    if label is None:
+        return None
+    v = str(label).strip().lower()
+    if not v:
+        return None
+    if v in {"strong", "high", "positive", "yes", "1", "true", "supported"}:
+        return 1
+    if v in {"weak", "moderate", "medium", "low", "negative", "0", "false", "unsupported"}:
+        return 0
+    return None
+
+
+def _sigmoid(x: float) -> float:
+    # Clamp for numerical stability
+    x = max(-60.0, min(60.0, float(x)))
+    return 1.0 / (1.0 + np.exp(-x))
+
+
+def _fit_logistic_weights(records: list[tuple[float, float, float, int]], iters: int = 2200) -> tuple[dict[str, float], dict[str, float]]:
+    # records: [(m,s,a,label_int)]
+    if not records:
+        return (
+            {"w1": 0.58, "w2": 0.22, "w3": 0.20, "b": 0.0},
+            {"status": "empty"},
+        )
+
+    n = len(records)
+    w1 = 0.58
+    w2 = 0.22
+    w3 = 0.20
+    b = 0.0
+    lr = 0.38
+    l2 = 0.001
+
+    for _ in range(max(1, iters)):
+        g1 = g2 = g3 = gb = 0.0
+        correct = 0
+        brier = 0.0
+        for m, s, a, y in records:
+            z = b + w1 * m + w2 * s + w3 * a
+            p = _sigmoid(z)
+            y_f = float(y)
+            diff = p - y_f
+            g1 += diff * m
+            g2 += diff * s
+            g3 += diff * a
+            gb += diff
+            brier += (p - y_f) ** 2
+            if (p >= 0.5) == bool(y_f):
+                correct += 1
+
+        g1 = g1 / n + l2 * w1
+        g2 = g2 / n + l2 * w2
+        g3 = g3 / n + l2 * w3
+        gb = gb / n + l2 * b
+
+        w1 -= lr * g1
+        w2 -= lr * g2
+        w3 -= lr * g3
+        b -= lr * gb
+
+    accuracy = correct / n if n else 0.0
+    brier = brier / n if n else 0.0
+    weights = {"w1": round(w1, 6), "w2": round(w2, 6), "w3": round(w3, 6), "b": round(b, 6)}
+    metrics = {
+        "n": n,
+        "accuracy": round(accuracy, 4),
+        "brier": round(brier, 4),
+        "method": "gradient_logistic",
+    }
+    return weights, metrics
+
+
+def _build_msa_records(payload: dict) -> list[tuple[float, float, float, int]]:
+    rows: list[tuple[float, float, float, int]] = []
+    for item in payload or []:
+        if not isinstance(item, dict):
+            continue
+        msa = item.get("msa") or {}
+        if isinstance(msa, dict) and all(k in msa for k in ("M", "S", "A")):
+            m = float(msa.get("M", 0.0))
+            s = float(msa.get("S", 0.0))
+            a = float(msa.get("A", 0.0))
+        else:
+            sentence = (item.get("sentence") or "").strip()
+            evidence_text = (
+                item.get("evidence")
+                or item.get("evidence_text")
+                or item.get("evidence_snippet")
+                or ""
+            )
+            if sentence and evidence_text:
+                m = entailment_prob(sentence, str(evidence_text))
+                s = float(item.get("S", 0.5))
+                a = float(item.get("A", 0.5))
+            else:
+                continue
+
+        label = _judge_label_to_binary(item.get("label"))
+        if label is None and "answer_supported" in item:
+            label = 1 if bool(item.get("answer_supported")) else 0
+        if label is None:
+            continue
+        rows.append((_clamp01(m), _clamp01(s), _clamp01(a), label))
+    return rows
+
+
 @app.post("/eval/run")
 def run_eval(payload: dict = Body(...)):
     name = (payload.get("name") or "Eval run").strip()
@@ -1748,6 +2348,167 @@ def list_eval_runs(limit: int = 20):
             }
         )
     return {"runs": out}
+
+
+@app.post("/eval/judge")
+def run_judge(payload: dict = Body(...)):
+    scope = payload.get("scope") or "uploaded"
+    k = int(payload.get("k") or 10)
+    cases = payload.get("cases") or []
+    if not isinstance(cases, list) or not cases:
+        raise HTTPException(status_code=400, detail="cases must be a non-empty list")
+    if scope not in {"uploaded", "public"}:
+        raise HTTPException(status_code=400, detail="scope must be uploaded or public")
+
+    run_judge_llm = bool(payload.get("run_judge_llm", True))
+    details = []
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        query = (case.get("query") or "").strip()
+        if not query:
+            continue
+
+        answer = (case.get("answer") or "").strip()
+        citations = case.get("citations")
+        if not answer or not isinstance(citations, list):
+            result = assistant_answer(
+                {
+                    "query": query,
+                    "scope": scope,
+                    "doc_id": case.get("doc_id"),
+                    "k": k,
+                    "run_judge": False,
+                    "allow_general_background": bool(case.get("allow_general_background", False)),
+                }
+            )
+            answer = (result.get("answer") or "").strip()
+            citations = result.get("citations") or []
+        report = evaluate_faithfulness(query, answer, citations if isinstance(citations, list) else [], use_llm=run_judge_llm)
+        details.append(
+            {
+                "query": query,
+                "answer": answer,
+                "citations": citations if isinstance(citations, list) else [],
+                "faithfulness": report,
+                "scope": scope,
+            }
+        )
+
+    if not details:
+        raise HTTPException(status_code=400, detail="No valid cases found")
+
+    aggregate = aggregate_judge_report([d.get("faithfulness", {}) for d in details])
+    row = fetchone(
+        """
+        INSERT INTO evaluation_judge_runs
+        (scope, query_count, metrics, details)
+        VALUES (%s, %s, %s::jsonb, %s::jsonb)
+        RETURNING id, created_at
+        """,
+        [
+            scope,
+            len(details),
+            json.dumps(aggregate),
+            json.dumps(details),
+        ],
+    )
+
+    return {
+        "run_id": row.get("id") if row else None,
+        "created_at": row.get("created_at").isoformat() if row and row.get("created_at") else None,
+        "scope": scope,
+        "query_count": len(details),
+        "metrics": aggregate,
+        "details": details,
+    }
+
+
+@app.get("/eval/judge/runs")
+def list_judge_runs(limit: int = 20):
+    rows = fetchall(
+        """
+        SELECT id, scope, query_count, metrics, details, created_at
+        FROM evaluation_judge_runs
+        ORDER BY id DESC
+        LIMIT %s
+        """,
+        [max(1, min(limit, 100))],
+    )
+    out = []
+    for r in rows:
+        out.append(
+            {
+                "id": r.get("id"),
+                "scope": r.get("scope"),
+                "query_count": r.get("query_count"),
+                "metrics": r.get("metrics"),
+                "created_at": r.get("created_at").isoformat() if r.get("created_at") else None,
+            }
+        )
+    return {"runs": out}
+
+
+@app.post("/confidence/calibrate")
+def calibrate_confidence(payload: dict = Body(...)):
+    records = payload.get("records") or []
+    if not isinstance(records, list) or not records:
+        raise HTTPException(status_code=400, detail="records must be a non-empty list")
+    msarecords = _build_msa_records(records)
+    if len(msarecords) < 5:
+        raise HTTPException(status_code=400, detail="At least 5 labeled records required to fit calibration.")
+    model_name = (payload.get("model_name") or "msa_logistic_v1").strip() or "msa_logistic_v1"
+    label = (payload.get("label") or "default").strip() or "default"
+    weights, metrics = _fit_logistic_weights(msarecords)
+    row = fetchone(
+        """
+        INSERT INTO confidence_calibration
+        (model_name, label, weights, metrics, dataset_size)
+        VALUES (%s, %s, %s::jsonb, %s::jsonb, %s)
+        RETURNING id, created_at
+        """,
+        [model_name, label, json.dumps(weights), json.dumps(metrics), len(msarecords)],
+    )
+    return {
+        "run_id": row.get("id") if row else None,
+        "created_at": row.get("created_at").isoformat() if row and row.get("created_at") else None,
+        "model_name": model_name,
+        "label": label,
+        "records_used": len(msarecords),
+        "weights": weights,
+        "metrics": metrics,
+    }
+
+
+@app.get("/confidence/calibration")
+def get_latest_calibration():
+    row = fetchone(
+        """
+        SELECT id, model_name, label, weights, metrics, dataset_size, created_at
+        FROM confidence_calibration
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+    )
+    if not row:
+        return {
+            "model_name": "msa_logistic_v1",
+            "label": "default",
+            "weights": {"w1": 0.58, "w2": 0.22, "w3": 0.20, "b": 0.0},
+            "metrics": None,
+            "dataset_size": 0,
+            "created_at": None,
+        }
+    created = row.get("created_at")
+    return {
+        "id": row.get("id"),
+        "model_name": row.get("model_name"),
+        "label": row.get("label"),
+        "weights": row.get("weights") or {"w1": 0.58, "w2": 0.22, "w3": 0.20, "b": 0.0},
+        "metrics": row.get("metrics"),
+        "dataset_size": row.get("dataset_size"),
+        "created_at": created.isoformat() if created else None,
+    }
 
 # ------------------------------
 # Load FAISS index and metadata

@@ -1,6 +1,7 @@
 import hashlib
 import io
 import os
+import re
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -25,6 +26,18 @@ DOC_TYPES = {"resume", "research_paper", "official_doc", "assignment", "notes", 
 
 def _ensure_doc_type_schema() -> None:
     execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_type TEXT DEFAULT 'other'")
+    # Backfill obvious research-paper docs for older rows.
+    execute(
+        """
+        UPDATE documents
+        SET doc_type='research_paper'
+        WHERE (doc_type IS NULL OR doc_type='other')
+          AND (
+            lower(title) ~ '\\m(arxiv|ieee|acm|conference|journal|paper)\\M'
+            OR lower(title) ~ '\\m[0-9]{4}\\.[0-9]{4,5}(v[0-9]+)?\\M'
+          )
+        """
+    )
 
 
 _ensure_doc_type_schema()
@@ -45,21 +58,89 @@ def _extract_pdf_text(data: bytes) -> List[Tuple[int, str]]:
 
 
 def _chunk_text(text: str, target_min: int = 300, target_max: int = 700, overlap: int = 50) -> List[str]:
-    words = text.split()
-    chunks = []
-    i = 0
-    while i < len(words):
-        end = min(len(words), i + target_max)
-        if end - i < target_min and end != len(words):
-            end = min(len(words), i + target_min)
-        chunk = " ".join(words[i:end]).strip()
-        if chunk:
-            chunks.append(chunk)
-        if overlap > 0 and end < len(words):
-            i = end - overlap
+    """
+    Sentence-aware chunking for better semantic retrieval.
+    """
+    text = _sanitize_text(text or "")
+    if not text.strip():
+        return []
+
+    # Normalize whitespace while preserving paragraph boundaries.
+    normalized = re.sub(r"[ \t]+", " ", text)
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", normalized) if p.strip()]
+    units: List[str] = []
+
+    for p in paragraphs:
+        # Split on sentence boundaries, but keep simple fallback for noisy OCR text.
+        sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9(\"'])", p) if s.strip()]
+        if len(sents) <= 1:
+            sents = [p]
+        units.extend(sents)
+
+    if not units:
+        return []
+
+    # More retrieval-friendly defaults for research PDFs.
+    target_min = max(110, min(int(target_min), 180))
+    target_max = max(220, min(int(target_max), 320))
+    overlap = max(20, min(int(overlap), 40))
+
+    chunks: List[str] = []
+    current: List[str] = []
+    current_tokens = 0
+
+    def _flush(force: bool = False):
+        nonlocal current, current_tokens
+        if not current:
+            return
+        if not force and current_tokens < target_min and chunks:
+            return
+        chunks.append(" ".join(current).strip())
+        if overlap > 0:
+            kept: List[str] = []
+            tok = 0
+            for sent in reversed(current):
+                st = len(sent.split())
+                if tok + st > overlap and kept:
+                    break
+                kept.append(sent)
+                tok += st
+            current = list(reversed(kept))
+            current_tokens = sum(len(s.split()) for s in current)
         else:
-            i = end
-    return chunks
+            current = []
+            current_tokens = 0
+
+    for sent in units:
+        sent_words = sent.split()
+        if not sent_words:
+            continue
+
+        # Hard-wrap very long sentence-like segments.
+        if len(sent_words) > target_max:
+            _flush(force=True)
+            i = 0
+            while i < len(sent_words):
+                j = min(len(sent_words), i + target_max)
+                piece = " ".join(sent_words[i:j]).strip()
+                if piece:
+                    chunks.append(piece)
+                if j >= len(sent_words):
+                    i = j
+                else:
+                    i = max(i + 1, j - overlap)
+            current = []
+            current_tokens = 0
+            continue
+
+        if current and (current_tokens + len(sent_words) > target_max):
+            _flush(force=True)
+
+        current.append(sent)
+        current_tokens += len(sent_words)
+
+    _flush(force=True)
+    return [c for c in chunks if c]
 
 
 def _sanitize_text(text: str) -> str:
@@ -89,6 +170,9 @@ def _infer_doc_type(name: str) -> str:
     if any(k in n for k in ("policy", "report", "spec", "manual", "company profile", "official")):
         return "official_doc"
     if any(k in n for k in ("paper", "arxiv", "ieee", "acm", "journal", "conference")):
+        return "research_paper"
+    # arXiv-style filenames like 2602.17037v2.pdf
+    if re.search(r"\b\d{4}\.\d{4,5}(v\d+)?\b", n):
         return "research_paper"
     return "other"
 
@@ -132,9 +216,9 @@ def list_documents():
     # Show unique titles (best-effort) ordered by recency
     docs = fetchall(
         """
-        SELECT DISTINCT ON (title) id, title, status, doc_type, pages, bytes, created_at
+        SELECT DISTINCT ON (COALESCE(hash_sha256, title)) id, title, status, doc_type, pages, bytes, created_at
         FROM documents
-        ORDER BY title, created_at DESC
+        ORDER BY COALESCE(hash_sha256, title), created_at DESC
         LIMIT 100
         """
     )
@@ -144,7 +228,17 @@ def list_documents():
 @router.get("/latest")
 def latest_documents(limit: int = 10):
     docs = fetchall(
-        "SELECT id, title, status, doc_type, pages, bytes, created_at FROM documents ORDER BY created_at DESC LIMIT %s",
+        """
+        SELECT id, title, status, doc_type, pages, bytes, created_at
+        FROM (
+            SELECT DISTINCT ON (COALESCE(hash_sha256, title))
+                id, title, status, doc_type, pages, bytes, created_at
+            FROM documents
+            ORDER BY COALESCE(hash_sha256, title), created_at DESC
+        ) t
+        ORDER BY created_at DESC
+        LIMIT %s
+        """,
         [limit],
     )
     return {"documents": docs}
@@ -167,6 +261,30 @@ async def upload_document(file: UploadFile = File(...), title: Optional[str] = N
     fpath.write_bytes(data)
 
     sha = _hash_bytes(data)
+    existing = fetchone(
+        """
+        SELECT id, status
+        FROM documents
+        WHERE hash_sha256=%s AND status IN ('processing','ready')
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        [sha],
+    )
+    if existing:
+        # Duplicate upload of the same file bytes: keep canonical doc context.
+        try:
+            if fpath.exists():
+                fpath.unlink()
+        except Exception:
+            pass
+        return JSONResponse(
+            {
+                "document_id": existing["id"],
+                "status": existing.get("status") or "ready",
+                "deduplicated": True,
+            }
+        )
 
     inferred_doc_type = _infer_doc_type(title or file.filename or "")
     doc_row = fetchone(
@@ -236,10 +354,11 @@ def search_chunks(payload: dict = None, q: str = None, k: int = 10, doc_id: Opti
 
     qvec = get_embedding(q)
     params = [qvec]
-    where = ""
+    where_clauses = ["documents.status = 'ready'"]
     if doc_id:
-        where = "WHERE chunks.document_id = %s"
+        where_clauses.append("chunks.document_id = %s")
         params.append(doc_id)
+    where = "WHERE " + " AND ".join(where_clauses)
     rows = fetchall(
         f"""
         SELECT chunks.id, chunks.document_id, documents.title, documents.doc_type, chunks.text, chunks.page_no, chunks.chunk_index,
@@ -261,12 +380,38 @@ def delete_document(doc_id: int):
     """
     Delete a document and its chunks/embeddings. Also delete from chat_uploads if present.
     """
-    # Best-effort cleanup of chunk embeddings and chat uploads
-    execute("DELETE FROM chunk_embeddings USING chunks WHERE chunk_embeddings.chunk_id = chunks.id AND chunks.document_id=%s", [doc_id])
-    execute("DELETE FROM chunks WHERE document_id=%s", [doc_id])
-    execute("DELETE FROM chat_uploads WHERE doc_id=%s", [doc_id])
-    execute("DELETE FROM documents WHERE id=%s", [doc_id])
-    return {"ok": True, "document_id": doc_id}
+    row = fetchone("SELECT id, hash_sha256, source_path FROM documents WHERE id=%s", [doc_id])
+    if not row:
+        return {"ok": True, "document_id": doc_id, "deleted_ids": []}
+
+    hash_sha = row.get("hash_sha256")
+    if hash_sha:
+        rel = fetchall("SELECT id, source_path FROM documents WHERE hash_sha256=%s", [hash_sha])
+    else:
+        rel = [row]
+    ids = [int(r.get("id")) for r in rel if r.get("id") is not None]
+
+    for did in ids:
+        execute(
+            "DELETE FROM chunk_embeddings USING chunks WHERE chunk_embeddings.chunk_id = chunks.id AND chunks.document_id=%s",
+            [did],
+        )
+        execute("DELETE FROM chunks WHERE document_id=%s", [did])
+        execute("DELETE FROM chat_uploads WHERE doc_id=%s", [did])
+        execute("DELETE FROM documents WHERE id=%s", [did])
+
+    for r in rel:
+        sp = r.get("source_path")
+        if not sp:
+            continue
+        try:
+            p = Path(sp)
+            if p.exists():
+                p.unlink()
+        except Exception:
+            pass
+
+    return {"ok": True, "document_id": doc_id, "deleted_ids": ids}
 
 
 @router.put("/{doc_id}/type")

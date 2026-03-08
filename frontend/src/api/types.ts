@@ -31,6 +31,7 @@ export type Citation = {
   distance?: number;
   similarity?: number;
   confidence?: number;
+  confidence_percent?: number;
   used_in_answer?: boolean;
   rank_before?: number;
   rank_after?: number;
@@ -42,6 +43,21 @@ export type Citation = {
   sim_score?: number;
   sim_raw?: number;
   confidence_obj?: ConfidenceObject;
+  evidence_id?: string;
+  msa?: {
+    M: number;
+    S: number;
+    A: number;
+    msa_score: number;
+    score_percent: number;
+    weights?: {
+      w1?: number;
+      w2?: number;
+      w3?: number;
+      b?: number;
+    };
+  };
+  msa_supported?: boolean;
 };
 
 export type ConfidenceObject = {
@@ -55,8 +71,45 @@ export type ConfidenceObject = {
     evidence_margin: number;
     ambiguity_penalty: number;
     insufficiency_penalty: number;
+    scope_penalty?: number;
+    msa?: {
+      M: number;
+      S: number;
+      A: number;
+      msa_score: number;
+      weights?: {
+        w1?: number;
+        w2?: number;
+        w3?: number;
+        b?: number;
+      };
+    };
   };
   explanation?: string;
+};
+
+export type FaithfulnessReport = {
+  overall_score: number;
+  citation_coverage: number;
+  supported_count: number;
+  unsupported_count: number;
+  sentence_count: number;
+  claims: Array<{
+    sentence_id: number;
+    sentence: string;
+    supported: boolean;
+    evidence_ids: string[];
+    reason: string;
+  }>;
+  unsupported: Array<{
+    sentence_id: number;
+    sentence: string;
+    supported: boolean;
+    reason: string;
+    evidence_ids?: string[];
+  }>;
+  method: string;
+  evidence_coverage_by_id?: Record<string, boolean>;
 };
 
 export type WhyTraceChunk = {
@@ -87,6 +140,7 @@ export type AnswerResponse = {
     rerank_changed_order: boolean;
     top_chunks: WhyTraceChunk[];
   };
+  faithfulness?: FaithfulnessReport | null;
   needs_clarification?: boolean;
   clarification?: {
     question: string;
@@ -109,6 +163,97 @@ export type AnswerResponse = {
     generate: number;
     total: number;
   };
+};
+
+export type JudgeCasePayload = {
+  query: string;
+  answer?: string;
+  citations?: Citation[];
+  doc_id?: number;
+  scope?: 'uploaded' | 'public';
+  allow_general_background?: boolean;
+};
+
+export type JudgeRunPayload = {
+  scope?: 'uploaded' | 'public';
+  k?: number;
+  run_judge_llm?: boolean;
+  cases: JudgeCasePayload[];
+};
+
+export type JudgeRunResponse = {
+  run_id?: number;
+  created_at?: string;
+  scope: 'uploaded' | 'public';
+  query_count: number;
+  metrics: {
+    mean_overall_score: number;
+    mean_coverage: number;
+    unsupported_total: number;
+    count: number;
+  };
+  details: Array<{
+    query: string;
+    answer: string;
+    citations: Citation[];
+    faithfulness: FaithfulnessReport;
+    scope: 'uploaded' | 'public';
+  }>;
+};
+
+export type MsaCalibrationPayload = {
+  records: Array<{
+    sentence?: string;
+    evidence?: string;
+    evidence_text?: string;
+    evidence_snippet?: string;
+    S?: number;
+    A?: number;
+    M?: number;
+    label?: string;
+    answer_supported?: boolean;
+    msa?: {
+      M: number;
+      S: number;
+      A: number;
+    };
+  }>;
+  model_name?: string;
+  label?: string;
+};
+
+export type MsaCalibrationResponse = {
+  run_id?: number;
+  created_at?: string;
+  model_name: string;
+  label: string;
+  records_used: number;
+  weights: {
+    w1: number;
+    w2: number;
+    w3: number;
+    b: number;
+  };
+  metrics: {
+    n: number;
+    accuracy: number;
+    brier: number;
+    method: string;
+  };
+};
+
+export type MsaCalibrationLatest = {
+  model_name: string;
+  label: string;
+  weights: {
+    w1: number;
+    w2: number;
+    w3: number;
+    b: number;
+  };
+  metrics: unknown;
+  dataset_size: number;
+  created_at: string | null;
 };
 
 export type ChatMessage = {

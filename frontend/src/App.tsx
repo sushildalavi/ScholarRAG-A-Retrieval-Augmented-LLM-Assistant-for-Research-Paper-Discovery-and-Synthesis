@@ -8,7 +8,11 @@ import { LatestDocumentsList } from './components/LatestDocumentsList';
 function confidenceText(c?: ConfidenceObject): string {
   if (!c) return 'No confidence metadata';
   const f = c.factors;
-  return `Confidence reflects evidence strength and coverage, penalized for ambiguity/insufficiency. top_sim=${f.top_sim.toFixed(4)}, top_rerank_norm=${f.top_rerank_norm.toFixed(4)}, citation_coverage=${f.citation_coverage.toFixed(4)}, evidence_margin=${f.evidence_margin.toFixed(4)}, ambiguity_penalty=${f.ambiguity_penalty.toFixed(4)}, insufficiency_penalty=${f.insufficiency_penalty.toFixed(4)}.`;
+  const msa = f.msa ? ` M=${f.msa.M.toFixed(2)} S=${f.msa.S.toFixed(2)} A=${f.msa.A.toFixed(2)} score=${f.msa.msa_score.toFixed(3)}.` : '';
+  return `Confidence reflects evidence strength and coverage, penalized for ambiguity/insufficiency. `
+    + `top_sim=${f.top_sim.toFixed(4)}, top_rerank_norm=${f.top_rerank_norm.toFixed(4)}, `
+    + `citation_coverage=${f.citation_coverage.toFixed(4)}, evidence_margin=${f.evidence_margin.toFixed(4)}, `
+    + `ambiguity_penalty=${f.ambiguity_penalty.toFixed(4)}, insufficiency_penalty=${f.insufficiency_penalty.toFixed(4)}${msa}`;
 }
 
 function ConfidenceBadge({ confidence }: { confidence?: ConfidenceObject }) {
@@ -93,6 +97,9 @@ function SourcesPanel({ citations, traceChunks }: { citations: Citation[]; trace
       return {
         id,
         title: c.title || trace?.title || `Document ${c.doc_id ?? trace?.doc_id ?? '?'}`,
+        doc_id: c.doc_id ?? trace?.doc_id,
+        msa: c.msa,
+        msa_supported: c.msa_supported,
         url: c.url,
         source: c.source,
         page: c.page ?? trace?.page,
@@ -119,22 +126,29 @@ function SourcesPanel({ citations, traceChunks }: { citations: Citation[]; trace
         <div className="sources-list">
           {sourceRows.map((c, idx) => (
             <button className="source-item source-item-btn" key={`${c.id || idx}-${idx}`} onClick={() => setModalChunk(c)}>
-              <div className="source-row">
-                <div className="source-tag-wrap">
-                  <span className="source-tag">S{c.id || idx + 1}</span>
-                  {c.cited ? <span className="source-scope scope-uploaded-document">Cited</span> : null}
+                <div className="source-row">
+                  <div className="source-tag-wrap">
+                    <span className="source-tag">S{c.id || idx + 1}</span>
+                    {c.cited ? <span className="source-scope scope-uploaded-document">Cited</span> : null}
+                  </div>
+                  <div className="source-conf-wrap">
+                    {c.msa?.msa_score != null ? (
+                      <span className="source-conf">
+                        MSA {Math.round((c.msa.msa_score || 0) * 100)}%
+                        {c.msa_supported ? null : ' (weak)'}
+                      </span>
+                    ) : (
+                      confidenceById.get((c.id || idx + 1)) ? (
+                        <span
+                          className="source-conf"
+                          title={confidenceText(confidenceById.get((c.id || idx + 1)))}
+                        >
+                          {confidenceById.get((c.id || idx + 1))?.label} {Math.round((confidenceById.get((c.id || idx + 1))?.score || 0) * 100)}%
+                        </span>
+                      ) : <span className="source-conf">Source</span>
+                    )}
+                  </div>
                 </div>
-                <div className="source-conf-wrap">
-                  {confidenceById.get((c.id || idx + 1)) ? (
-                    <span
-                      className="source-conf"
-                      title={confidenceText(confidenceById.get((c.id || idx + 1)))}
-                    >
-                      {confidenceById.get((c.id || idx + 1))?.label} {Math.round((confidenceById.get((c.id || idx + 1))?.score || 0) * 100)}%
-                    </span>
-                  ) : <span className="source-conf">Source</span>}
-                </div>
-              </div>
               <div className="source-name">{c.title || `Document ${c.doc_id || '?'}`}</div>
               <div className="source-sub">
                 {(c.source || 'source').toString()}
@@ -168,6 +182,7 @@ type UiMessage = {
   latency_breakdown_ms?: { retrieve: number; rerank: number; generate: number; total: number };
   needs_clarification?: boolean;
   clarification?: { question: string; options: string[]; recommended_option?: string } | null;
+  faithfulness?: { overall_score: number } | null;
   answer_scope?: string;
   unsupported_claims?: number;
   query_ref?: string;
@@ -328,6 +343,7 @@ function StudioPage() {
   const [questionDoc, setQuestionDoc] = useState('');
   const [allowGeneralBackground, setAllowGeneralBackground] = useState(false);
   const [compareSenses, setCompareSenses] = useState(false);
+  const [runJudge, setRunJudge] = useState(false);
   const [loadingDoc, setLoadingDoc] = useState(false);
   const [errorDoc, setErrorDoc] = useState('');
   const [docMessages, setDocMessages] = useState<UiMessage[]>([]);
@@ -419,7 +435,7 @@ function StudioPage() {
   const streamAssistantMessage = (
     setter: Dispatch<SetStateAction<UiMessage[]>>,
     fullText: string,
-    payload: Pick<UiMessage, 'citations' | 'confidence' | 'why_answer' | 'latency_breakdown_ms' | 'needs_clarification' | 'clarification' | 'answer_scope' | 'unsupported_claims' | 'query_ref'>,
+    payload: Pick<UiMessage, 'citations' | 'confidence' | 'why_answer' | 'latency_breakdown_ms' | 'needs_clarification' | 'clarification' | 'answer_scope' | 'unsupported_claims' | 'query_ref' | 'faithfulness'>,
   ) => {
     const finalText = fullText || 'No response received. Check backend/OpenAI key.';
     setter((msgs) => [...msgs, { role: 'assistant', text: '', streaming: true, ...payload }]);
@@ -470,6 +486,8 @@ function StudioPage() {
         sense,
         compare_senses: compareSenses,
         allow_general_background: allowGeneralBackground,
+        run_judge: runJudge,
+        run_judge_llm: true,
       });
       streamAssistantMessage(setDocMessages, (res.answer || res.clarification?.question || '').trim(), {
         citations: res.citations || [],
@@ -480,6 +498,7 @@ function StudioPage() {
         clarification: res.clarification,
         answer_scope: res.answer_scope,
         unsupported_claims: res.unsupported_claims,
+        faithfulness: res.faithfulness,
         query_ref: effectiveQuery,
       });
     } catch (e: any) {
@@ -508,9 +527,18 @@ function StudioPage() {
             selectedId={selectedDoc}
             onSelect={setSelectedDoc}
             onDelete={async (id) => {
+              const target = dedupedDocs.find((d) => d.id === id);
+              const title = target?.title || `Document ${id}`;
+              const ok = window.confirm(
+                `Are you sure you want to delete "${title}"?\n\n`
+                + "Disclaimer: Removing this document will permanently remove its chunks/embeddings and "
+                + "the RAG assistant will no longer use this document context in answers."
+              );
+              if (!ok) return;
               try {
                 await api.deleteDoc(id);
                 if (selectedDoc === id) setSelectedDoc(null);
+                setActiveEvidence({ citations: [], trace: [] });
                 refreshDocs();
               } catch (e) {
                 console.error(e);
@@ -531,6 +559,10 @@ function StudioPage() {
                 <button className={!allowGeneralBackground ? 'active' : ''} onClick={() => setAllowGeneralBackground(false)}>Docs only</button>
                 <button className={allowGeneralBackground ? 'active' : ''} onClick={() => setAllowGeneralBackground(true)}>Allow general background</button>
               </div>
+              <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 12, color: '#355a84' }}>
+                <input type="checkbox" checked={runJudge} onChange={(e) => setRunJudge(e.target.checked)} />
+                Run LLM faithfulness judge
+              </label>
               <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 12, color: '#355a84' }}>
                 <input type="checkbox" checked={compareSenses} onChange={(e) => setCompareSenses(e.target.checked)} />
                 Compare senses (only when ambiguous)
@@ -571,6 +603,11 @@ function StudioPage() {
                     <div className="assistant-meta-row">
                       <ConfidenceBadge confidence={m.confidence} />
                       {m.answer_scope ? <div className="latency-chip">Scope: {m.answer_scope}</div> : null}
+                      {m.faithfulness ? (
+                        <div className="latency-chip">
+                          Faithfulness: {Math.round((m.faithfulness.overall_score || 0) * 100)}%
+                        </div>
+                      ) : null}
                     </div>
                     {m.needs_clarification && m.clarification?.options?.length ? (
                       <div className="clarify-box">

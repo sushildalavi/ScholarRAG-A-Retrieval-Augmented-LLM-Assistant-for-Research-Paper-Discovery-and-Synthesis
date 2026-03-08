@@ -1,4 +1,15 @@
-import { AnswerResponse, ChunkResult, DocumentRow, EvalCase, EvalRunResponse } from './types';
+import {
+  AnswerResponse,
+  ChunkResult,
+  DocumentRow,
+  EvalCase,
+  EvalRunResponse,
+  JudgeRunPayload,
+  JudgeRunResponse,
+  MsaCalibrationPayload,
+  MsaCalibrationResponse,
+  MsaCalibrationLatest,
+} from './types';
 import { ChatSession } from './types';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000';
@@ -53,6 +64,8 @@ export const api = {
     sense?: string;
     compare_senses?: boolean;
     allow_general_background?: boolean;
+    run_judge?: boolean;
+    run_judge_llm?: boolean;
   }): Promise<AnswerResponse> {
     return jsonRequest('/assistant/answer', {
       method: 'POST',
@@ -101,5 +114,27 @@ export const api = {
 
   async listEvalRuns(limit = 20): Promise<{ runs: EvalRunResponse[] }> {
     return jsonRequest(`/eval/runs?limit=${limit}`);
+  },
+
+  async runJudge(payload: JudgeRunPayload): Promise<JudgeRunResponse> {
+    return jsonRequest('/eval/judge', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async listJudgeRuns(limit = 20): Promise<{ runs: Array<{ id: number; scope: 'uploaded' | 'public'; query_count: number; metrics: Record<string, unknown> }> } > {
+    return jsonRequest(`/eval/judge/runs?limit=${limit}`);
+  },
+
+  async calibrateConfidence(payload: MsaCalibrationPayload): Promise<MsaCalibrationResponse> {
+    return jsonRequest('/confidence/calibrate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getLatestCalibration(): Promise<MsaCalibrationLatest> {
+    return jsonRequest('/confidence/calibration');
   },
 };

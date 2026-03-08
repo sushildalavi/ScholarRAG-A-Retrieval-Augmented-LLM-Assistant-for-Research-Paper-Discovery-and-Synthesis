@@ -128,3 +128,36 @@ CREATE TABLE IF NOT EXISTS eval_runs (
     details JSONB,
     created_at TIMESTAMP DEFAULT now()
 );
+
+-- ----- M/S/A confidence scoring artifacts -----
+CREATE TABLE IF NOT EXISTS confidence_calibration (
+    id SERIAL PRIMARY KEY,
+    model_name TEXT DEFAULT 'msa_logistic_v1',
+    label TEXT DEFAULT 'default',
+    weights JSONB NOT NULL,
+    metrics JSONB,
+    dataset_size INT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS evidence_scores (
+    id SERIAL PRIMARY KEY,
+    request_id TEXT,
+    sentence_id INT,
+    citation_id INT,
+    evidence_id TEXT,
+    m_score REAL,
+    s_score REAL,
+    a_score REAL,
+    score REAL,
+    created_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS evaluation_judge_runs (
+    id SERIAL PRIMARY KEY,
+    scope TEXT DEFAULT 'uploaded',
+    query_count INT DEFAULT 0,
+    metrics JSONB,
+    details JSONB,
+    created_at TIMESTAMP DEFAULT now()
+);
