@@ -165,6 +165,19 @@ export type AnswerResponse = {
   };
 };
 
+export type AskAssistantPayload = {
+  query: string;
+  scope: 'uploaded' | 'public';
+  doc_id?: number;
+  doc_ids?: number[];
+  k?: number;
+  sense?: string;
+  compare_senses?: boolean;
+  allow_general_background?: boolean;
+  run_judge?: boolean;
+  run_judge_llm?: boolean;
+};
+
 export type JudgeCasePayload = {
   query: string;
   answer?: string;
@@ -199,6 +212,19 @@ export type JudgeRunResponse = {
     faithfulness: FaithfulnessReport;
     scope: 'uploaded' | 'public';
   }>;
+};
+
+export type JudgeRunSummary = {
+  id: number;
+  scope: 'uploaded' | 'public';
+  query_count: number;
+  metrics: {
+    mean_overall_score?: number;
+    mean_coverage?: number;
+    unsupported_total?: number;
+    count?: number;
+  };
+  created_at: string | null;
 };
 
 export type MsaCalibrationPayload = {

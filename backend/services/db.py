@@ -2,9 +2,16 @@ import os
 from typing import Any, Iterable, Optional
 
 import psycopg2
+from psycopg2.extensions import connection as PGConnection
+from utils.config import _load_dotenv_if_available
 
 
-def get_connection():
+def get_connection() -> PGConnection:
+    _load_dotenv_if_available()
+    database_url = os.getenv("DATABASE_URL")
+    if database_url:
+        return psycopg2.connect(database_url)
+
     return psycopg2.connect(
         host=os.getenv("PGHOST", "127.0.0.1"),
         port=int(os.getenv("PGPORT", "5432")),

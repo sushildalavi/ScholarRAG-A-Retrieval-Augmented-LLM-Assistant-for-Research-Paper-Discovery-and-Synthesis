@@ -6,6 +6,7 @@ import {
   EvalRunResponse,
   JudgeRunPayload,
   JudgeRunResponse,
+  JudgeRunSummary,
   MsaCalibrationPayload,
   MsaCalibrationResponse,
   MsaCalibrationLatest,
@@ -60,6 +61,7 @@ export const api = {
     query: string;
     scope: 'uploaded' | 'public';
     doc_id?: number;
+    doc_ids?: number[];
     k?: number;
     sense?: string;
     compare_senses?: boolean;
@@ -123,7 +125,7 @@ export const api = {
     });
   },
 
-  async listJudgeRuns(limit = 20): Promise<{ runs: Array<{ id: number; scope: 'uploaded' | 'public'; query_count: number; metrics: Record<string, unknown> }> } > {
+  async listJudgeRuns(limit = 20): Promise<{ runs: JudgeRunSummary[] }> {
     return jsonRequest(`/eval/judge/runs?limit=${limit}`);
   },
 

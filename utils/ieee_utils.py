@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 IEEE_URL = "https://ieeexploreapi.ieee.org/api/v1/search/articles"
 MAX_RETRIES = 3
+_AUTH_DISABLED = False
 
 
 def _backoff(attempt: int) -> float:
@@ -17,9 +18,12 @@ def _backoff(attempt: int) -> float:
 
 
 def fetch_from_ieee(query: str, limit: Optional[int] = None, year_from: Optional[int] = None, year_to: Optional[int] = None) -> List[Dict]:
+    global _AUTH_DISABLED
     ieee_key = os.getenv("IEEE_API_KEY")
     ieee_max = int(os.getenv("IEEE_MAX_RESULTS", "30")) or 30
     request_timeout = float(os.getenv("IEEE_TIMEOUT", "10"))
+    if _AUTH_DISABLED:
+        return []
     if not ieee_key:
         logger.debug("IEEE_API_KEY not set; skipping IEEE fetch.")
         return []
@@ -66,6 +70,11 @@ def fetch_from_ieee(query: str, limit: Optional[int] = None, year_from: Optional
                 )
             return results
         except requests.RequestException as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status in {401, 403}:
+                logger.warning("IEEE disabled for this server process due to authorization failure (%s).", status)
+                _AUTH_DISABLED = True
+                return []
             logger.warning("IEEE request failed (attempt %s/%s): %s", attempt, MAX_RETRIES, exc)
             if attempt == MAX_RETRIES:
                 return []

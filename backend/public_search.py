@@ -1,6 +1,7 @@
 import numpy as np
 import os
 import re
+import logging
 
 from utils.embedding_utils import embed_query, embed_batch_cached
 from utils.openalex_utils import fetch_candidates_from_openalex
@@ -19,6 +20,8 @@ SPRINGER_LIMIT = int(os.getenv("PUBLIC_SPRINGER_LIMIT", "10")) or 10
 ELSEVIER_LIMIT = int(os.getenv("PUBLIC_ELSEVIER_LIMIT", "10")) or 10
 IEEE_LIMIT = int(os.getenv("PUBLIC_IEEE_LIMIT", "10")) or 10
 PUBLIC_SPARSE_WEIGHT = float(os.getenv("PUBLIC_SPARSE_WEIGHT", "0.25"))
+logger = logging.getLogger(__name__)
+_DISABLED_PROVIDERS: set[str] = set()
 
 
 def _normalize_public_query(query: str) -> str:
@@ -97,6 +100,8 @@ def _sparse_overlap_score(query: str, text: str) -> float:
 
 
 def _fetch_provider(provider: str, query: str, limit: int) -> list[dict]:
+    if provider in _DISABLED_PROVIDERS:
+        return {"results": [], "provider_status": {}} if return_metadata else []
     if provider == "openalex" and OPENALEX_LIMIT > 0:
         return fetch_candidates_from_openalex(query, limit=min(limit, OPENALEX_LIMIT))
     if provider == "arxiv" and ARXIV_LIMIT > 0:
@@ -114,31 +119,36 @@ def _fetch_provider(provider: str, query: str, limit: int) -> list[dict]:
     return []
 
 
-def public_live_search(query: str, k: int = 8, source_only: str | None = None):
+def public_live_search(query: str, k: int = 8, source_only: str | None = None, return_metadata: bool = False):
     """
     Fetch fresh candidates from external sources and rerank with embeddings + sparse overlap.
     """
     # trivial chatty queries: skip external search
     qnorm = (query or "").strip().lower()
     if not qnorm or len(qnorm) < 3 or qnorm in {"hi", "hello", "hey", "thanks", "thank you"}:
-        return []
+        return {"results": [], "provider_status": {}} if return_metadata else []
 
     provider = (source_only or "").strip().lower()
     query_variants = _query_variants(query)
     if not query_variants:
-        return []
+        return {"results": [], "provider_status": {}} if return_metadata else []
 
     candidates = []
+    provider_status: dict[str, dict] = {}
     if provider:
         for qv in query_variants:
-            candidates += _fetch_provider(provider, qv, limit=max(k * 3, 12))
+            rows = _fetch_provider(provider, qv, limit=max(k * 3, 12))
+            provider_status[provider] = {"queried": True, "variant": qv, "fetched": len(rows)}
+            candidates += rows
             if len(candidates) >= max(k * 5, 20):
                 break
     else:
         providers = ("openalex", "arxiv", "crossref", "semanticscholar", "springer", "elsevier", "ieee")
         primary_query = query_variants[0]
         for p in providers:
-            candidates += _fetch_provider(p, primary_query, limit=max(k * 2, 10))
+            rows = _fetch_provider(p, primary_query, limit=max(k * 2, 10))
+            provider_status[p] = {"queried": True, "variant": primary_query, "fetched": len(rows)}
+            candidates += rows
 
     # dedupe by DOI/id/title
     seen = set()
@@ -154,7 +164,7 @@ def public_live_search(query: str, k: int = 8, source_only: str | None = None):
         uniq.append(c)
 
     if not uniq:
-        return []
+        return {"results": [], "provider_status": provider_status} if return_metadata else []
 
     texts = []
     ids = []
@@ -182,4 +192,14 @@ def public_live_search(query: str, k: int = 8, source_only: str | None = None):
         scored.append(c)
 
     scored.sort(key=lambda x: x.get("_hybrid", x.get("_sim", 0.0)), reverse=True)
-    return scored[:k]
+    final_results = scored[:k]
+    final_counts: dict[str, int] = {}
+    for row in final_results:
+        src = (row.get("source") or "unknown_public").lower()
+        final_counts[src] = final_counts.get(src, 0) + 1
+    for provider_name, meta in provider_status.items():
+        meta["selected"] = final_counts.get(provider_name, 0)
+        meta["contributed"] = meta["selected"] > 0
+    if return_metadata:
+        return {"results": final_results, "provider_status": provider_status}
+    return final_results

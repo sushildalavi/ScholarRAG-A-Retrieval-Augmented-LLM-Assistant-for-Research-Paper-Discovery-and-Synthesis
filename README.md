@@ -1,140 +1,154 @@
 # ScholarRAG
 
-ScholarRAG is a Retrieval-Augmented Generation (RAG) assistant for research paper discovery and synthesis.
+ScholarRAG is a retrieval-augmented research assistant for research paper discovery, uploaded-document question answering, citation-grounded responses, and confidence-aware answer generation.
 
-It combines:
-- FastAPI backend for retrieval, ingestion, and answer generation
-- React (Vite + TypeScript) frontend for document upload and conversational Q&A
-- PostgreSQL + pgvector for chunk/document storage and vector search
-- FAISS + metadata bootstrap for global paper retrieval
+It currently combines:
+- `FastAPI` backend for ingestion, retrieval, reranking, grounding, confidence scoring, and judge evaluation
+- `React + Vite + TypeScript` frontend for document upload, multi-document chat, evidence inspection, and evaluation views
+- `Postgres + pgvector` for uploaded document chunks, embeddings, evaluation runs, and confidence artifacts
+- `FAISS` bootstrap indexing for the current local paper-index path
+- `Ollama` for embeddings
+- `OpenAI` for answer generation and judge evaluation
+
+## Current status
+
+This repository is in a hybrid state:
+
+- Implemented now:
+  - uploaded PDF ingestion
+  - chunking + embedding
+  - Postgres-backed uploaded-document retrieval
+  - citation-grounded answering
+  - confidence metadata
+  - judge / calibration tables
+  - multi-provider public retrieval aggregation
+  - local frontend/backend development flow
+
+- Still present from the earlier local architecture:
+  - FAISS-based paper index bootstrap
+  - local runtime artifact folders such as `data/`, `storage/`, and `logs/`
+
+- Deployment target being implemented:
+  - frontend on `Vercel`
+  - backend as hosted `FastAPI`
+  - cloud database/storage via `Supabase`
+  - `Ollama` embeddings + `OpenAI` generation/judge
+
+Do not treat the project as fully migrated away from FAISS yet. The codebase is currently a mixed local/cloud architecture with a clear path toward a more production-oriented Supabase/Postgres deployment.
 
 ## Architecture
 
-### Backend (`backend/`)
-- `backend/app.py`: main API entrypoint and route wiring
-- `backend/pdf_ingest.py`: upload, parse, chunk, embed, and document status tracking
-- `backend/chat.py`: chat sessions and chat upload routes
-- `backend/retriever.py`: retrieval and reranking pipeline
-- `backend/public_search.py`: live public source retrieval
-- `backend/services/db.py`: DB access layer
-- `backend/services/embeddings.py`: embedding generation + caching
+### Current implemented architecture
 
-### Frontend (`frontend/`)
-- React app with document upload, doc-scoped QA, and assistant panel
-- API base URL via `VITE_API_BASE` (defaults to `http://127.0.0.1:8000`)
+- `frontend/`
+  - React SPA for upload, chat, evidence panel, and evaluation screens
 
-### Data and Storage
-- `data/scholar_index.faiss`: global FAISS index
-- `data/metadata.json`: metadata aligned to FAISS entries
-- `data/user_indices/`: per-user indices (runtime)
-- `storage/`: uploaded files (runtime)
-- `logs/`: request/retrieval logs (runtime)
+- `backend/`
+  - `backend/app.py`: primary API entrypoint and orchestration
+  - `backend/pdf_ingest.py`: PDF ingestion, chunking, embedding storage, uploaded-doc search
+  - `backend/public_search.py`: public scholarly source aggregation and reranking
+  - `backend/chat.py`: chat session and upload routes
+  - `backend/services/db.py`: DB connection and SQL helpers
+  - `backend/services/embeddings.py`: OpenAI/Ollama embedding abstraction
+  - `backend/services/judge.py`: answer faithfulness / judge logic
+  - `backend/confidence.py`: confidence scoring utilities
 
-## Requirements
+- `db/init.sql`
+  - base schema for:
+    - `documents`
+    - `chunks`
+    - `chunk_embeddings`
+    - `chat_sessions`
+    - `chat_messages`
+    - `eval_runs`
+    - `confidence_calibration`
+    - `evidence_scores`
+    - `evaluation_judge_runs`
 
-- Python 3.10+
-- Node.js 18+
-- Docker Desktop (for local PostgreSQL)
+### Target deployment architecture
 
-## Environment Configuration
+- Frontend: `Vercel`
+- Backend: hosted `FastAPI`
+- Database: `Supabase Postgres`
+- Storage: `Supabase Storage`
+- Embeddings: `Ollama`
+- Generation: `OpenAI`
+- Judge evaluation: `OpenAI`
+- Retrieval: uploaded-doc Postgres retrieval + public multi-provider aggregation
 
-Create local env file:
+## Public retrieval aggregation flow
 
-```bash
-cp .env.example .env
-```
+When a public query is given, ScholarRAG is designed to aggregate results across multiple scholarly APIs and return one merged final result set.
 
-Required:
-- `OPENAI_API_KEY`
-- `RESEARCH_CHAT_MODEL` (default: `gpt-4o-mini`)
+Current aggregation path in `backend/public_search.py`:
 
-Optional provider keys:
-- `OPENALEX_API_KEY`
-- `SPRINGER_API_KEY`
-- `IEEE_API_KEY`
-- `ELSEVIER_API_KEY`
-- `SEMANTIC_SCHOLAR_API_KEY`
+- `OpenAlex`
+- `arXiv`
+- `Crossref`
+- `Semantic Scholar`
+- `Springer`
+- `Elsevier`
+- `IEEE`
 
-Common optional tuning:
-- `PUBLIC_OPENALEX_LIMIT`, `PUBLIC_ARXIV_LIMIT`, `PUBLIC_CROSSREF_LIMIT`, `PUBLIC_S2_LIMIT`
-- `PUBLIC_SPRINGER_LIMIT`, `PUBLIC_ELSEVIER_LIMIT`, `PUBLIC_IEEE_LIMIT`
-- `ARXIV_API_URL` (defaults to `https://export.arxiv.org/api/query`)
-- `ENABLE_WEB_FALLBACK` (default: `false`, keeps research retrieval on standard scholarly sources)
-- `SPRINGER_META_VERSION` (`v2` default; falls back to legacy metadata endpoint)
+Flow:
 
-For full supported environment variables, see `.env.example`.
+1. Normalize the user query into a search-friendly form.
+2. Fetch candidate records from all enabled providers.
+3. Deduplicate records by DOI / provider ID / title.
+4. Compute:
+   - dense similarity using embeddings
+   - sparse lexical overlap score
+5. Build a hybrid score.
+6. Return one reranked merged list as the final public retrieval result.
 
-## Local Development
+This is the correct high-level flow for your project.
 
-### 1) Start PostgreSQL + Adminer
+Important implementation note:
 
-```bash
-docker compose up -d db adminer
-```
+- Not every configured provider is currently operational in your environment.
+- `Elsevier` and `IEEE` are currently failing authorization in your setup.
+- The aggregator still works because the final result is built from whichever providers successfully return candidates.
 
-- PostgreSQL: `127.0.0.1:5432`
-- Adminer: `http://127.0.0.1:8080`
+So yes, keeping the “aggregate across APIs, merge, rerank, and return one final result” flow is the right design.
 
-### 2) Start Backend
+## Uploaded-document flow
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install fastapi "uvicorn[standard]" sqlalchemy psycopg2-binary pgvector python-dotenv requests openai pydantic PyPDF2 python-multipart faiss-cpu numpy google-auth
-uvicorn backend.app:app --reload --reload-dir backend --host 127.0.0.1 --port 8000
-```
+1. User uploads one or more PDFs.
+2. Backend extracts text and splits it into chunks.
+3. Chunks are embedded using the configured embedding provider.
+4. Chunks and vectors are stored in Postgres.
+5. User asks a question over selected documents.
+6. Backend retrieves the most relevant chunk evidence from the selected docs.
+7. Evidence is reranked and passed into answer generation.
+8. Answer is returned with citations, confidence metadata, and optional judge results.
 
-Backend docs:
-- `http://127.0.0.1:8000/docs`
+## Multi-document QA flow
 
-### 3) Start Frontend
+For multi-document questions, the intended behavior is:
 
-```bash
-cd frontend
-cp .env.example .env 2>/dev/null || true
-npm ci
-npm run dev
-```
+1. User selects multiple uploaded docs.
+2. Retrieval pulls evidence from all selected docs.
+3. Evidence is rebalanced so one file does not dominate the pool.
+4. Answer generation should organize output by document when the request is summary/comparison-oriented.
+5. Final output includes:
+   - answer text
+   - citations
+   - confidence
+   - supporting evidence panel
 
-Frontend:
-- `http://127.0.0.1:5173`
+This is also the right flow to keep.
 
-## Production Notes
+## Confidence and trust layer
 
-- Keep `.env` out of git.
-- Do not commit runtime/generated artifacts:
-  - `.venv/`, `node_modules/`, `frontend/dist/`, `frontend/.vite/`, `__pycache__/`, `storage/`, `logs/`
-- Rotate API keys immediately if exposed.
-- Keep CI checks under `.github/workflows/` for quality gates.
+ScholarRAG currently includes:
 
-## Useful Commands
+- citation grounding
+- answer confidence objects
+- M/S/A-style support tracking in the schema
+- judge evaluation support
+- calibration storage tables
 
-From repo root:
-
-```bash
-# Python syntax sanity
-python -m py_compile $(find . -name '*.py' -not -path './.venv/*' -not -path './frontend/node_modules/*')
-
-# Frontend lint/build
-cd frontend && npm run lint && npm run build
-```
-
-## API Surface (high-level)
-
-- `GET /` health message
-- `POST /assistant/answer` unified assistant endpoint
-- `POST /assistant/chat` chat endpoint
-- `POST /documents/upload` upload and ingest document
-- `POST /documents/search/chunks` chunk retrieval
-- `GET /documents/latest` latest uploaded docs
-- `DELETE /documents/{doc_id}` delete uploaded doc
-- `POST /eval/run` run retrieval-only vs retrieval+rerank evaluation
-- `GET /eval/runs` list stored eval runs
-
-## Confidence Definition
-
-ScholarRAG now returns a structured confidence object for each answer and source card:
+Current confidence objects expose:
 
 ```json
 {
@@ -153,104 +167,157 @@ ScholarRAG now returns a structured confidence object for each answer and source
 }
 ```
 
-Interpretation:
-- `top_sim`: top chunk relevance signal (normalized)
-- `top_rerank_norm`: top reranker normalized score
-- `citation_coverage`: fraction of answer paragraphs that include citations
-- `evidence_margin`: separation between top evidence and runner-up evidence
-- `ambiguity_penalty`: reduction due to unresolved or compare-mode ambiguity
-- `insufficiency_penalty`: reduction when evidence is missing/unsupported
+## Sense resolver and scope guard
 
-UI behavior:
-- Confidence badge shows `High/Med/Low + %`
-- Hover tooltip explains factor breakdown and scoring meaning
+The backend includes guards for:
 
-## “Why This Answer?” Trace
+- ambiguous terms such as `transformer`, `python`, `java`, `react`
+- company/entity questions that only have resume-style evidence
+- evidence-insufficient answers that should be limited or clarified rather than hallucinated
 
-Each assistant answer includes a trace payload (`why_answer`) and the UI renders it below the message:
-- top retrieved chunks (title, chunk id, page, snippet preview)
-- similarity and rerank score per chunk
-  - `cosine` = similarity signal (raw)
-  - `rerank_raw` = raw reranker score
-  - `rerank_norm` = normalized reranker score for display
-- whether the chunk was actually cited
-- rank delta (`before` vs `after`) when reranking changed order
+This is aligned with the direction you want for a more rigorous ScholarRAG system.
 
-This keeps responses doc-grounded and auditable.
+## Data and storage
 
-## Sense Resolver (Ambiguity Gate)
+Current local/runtime artifacts:
 
-Before generating an answer, ScholarRAG runs a sense-resolution step:
-- detects curated ambiguous terms (e.g., `transformer`, `python`, `java`, `rust`, `react`, etc.)
-- inspects top evidence for mixed-sense signals
-- if ambiguous and user has not selected a sense, returns clarification instead of an answer
+- `data/scholar_index.faiss`
+- `data/metadata.json`
+- `storage/`
+- `logs/`
 
-Example clarification:
-- “Do you mean ML Transformer models, or Electrical power transformers?”
+Current database-backed uploaded-doc path:
 
-The frontend renders clickable options (chips). Once selected, retrieval is constrained to the chosen sense.
+- `documents`
+- `chunks`
+- `chunk_embeddings`
+- `chat_sessions`
+- `chat_messages`
+- `eval_runs`
+- `confidence_calibration`
+- `evidence_scores`
+- `evaluation_judge_runs`
 
-Compare mode:
-- If explicitly enabled, the model may answer in separate sense sections, still citation-grounded.
+## Environment configuration
 
-Endpoint:
-- `POST /assistant/resolve_sense` (query + optional sense)
+Create local env file:
 
-## Grounding Policy (Strict)
+```bash
+cp .env.example .env
+```
 
-- Default mode is doc-grounded (`Docs only`).
-- General background is disabled unless user enables `Allow general background`.
-- Every claim paragraph/bullet must have citation support.
-- If unsupported paragraphs are detected, answer is blocked and the assistant asks for clarification or more evidence.
-- For ambiguous terms, answer generation is blocked until sense is clarified (unless compare mode is explicitly enabled).
+Core required values:
 
-## Entity-Scope Aware Retrieval Policy
+- `OPENAI_API_KEY`
+- `RESEARCH_CHAT_MODEL`
+- `EMBEDDING_PROVIDER`
 
-To prevent resume-based hallucinated company summaries, ScholarRAG now enforces scope checks:
+For Ollama embeddings:
 
-1. `doc_type` metadata on uploaded documents:
-- `resume | research_paper | official_doc | assignment | notes | other`
-- inferred from filename at upload time
-- can be overridden via `PUT /documents/{doc_id}/type`
+- `EMBEDDING_PROVIDER=ollama`
+- `OLLAMA_BASE_URL=http://127.0.0.1:11434`
+- `OLLAMA_EMBED_MODEL=nomic-embed-text`
 
-2. Entity-level query detection:
-- patterns like `tell me about X`, `what is X`, `X company`, `X irvine`
-- excludes personal-role intent (`worked`, `experience`, `intern`, etc.)
+For DB / cloud path:
 
-3. Scope guard before generation:
-- if entity-level query + retrieved evidence is only personal/resume context + no official/company docs exist,
-- assistant does **not** generate company-level overview,
-- returns context-limited clarification prompt instead.
+- `DATABASE_URL`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_JWT_SECRET`
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
 
-4. Confidence alignment:
-- applies `scope_penalty` when entity-level answers rely on personal-only context
-- may return `Context-limited` label / `Needs clarification`.
+Optional public provider keys:
 
-5. UI scope indicator:
-- answer shows scope tags such as `personal_document_context` or `official_document_context`.
+- `OPENALEX_API_KEY`
+- `SPRINGER_API_KEY`
+- `IEEE_API_KEY`
+- `ELSEVIER_API_KEY`
+- `SEMANTIC_SCHOLAR_API_KEY`
 
-## Evaluation Methodology (`/eval`)
+Important note:
 
-Open `http://127.0.0.1:5173/eval` to run retrieval evaluations with a test set:
-- Input format: array of objects with `query` and `expected_doc_id`
-- Pipelines compared:
-1. retrieval-only (raw vector order)
-2. retrieval + rerank
+- `OpenAI` is still required for answer generation and judge evaluation in the current architecture.
 
-Computed metrics:
-- Recall@K for `K = 1, 3, 5, 10`
-- MRR
-- nDCG@K for `K = 3, 5, 10`
-- Latency breakdown: retrieve, rerank, generate
+## Local development
 
-Runs are stored in DB table `eval_runs` and listed via `GET /eval/runs`.
+### 1. Start Ollama
 
-## Safety / Grounding Policy
+```bash
+ollama serve
+ollama pull nomic-embed-text
+```
 
-- Default behavior remains evidence-first.
-- If evidence is insufficient, the assistant explicitly says so and avoids broad unsupported claims.
-- The answer text is phrased naturally, but scope limitations are preserved and cited.
+### 2. Start backend
 
-## License
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install fastapi "uvicorn[standard]" sqlalchemy psycopg2-binary pgvector python-dotenv requests openai pydantic PyPDF2 python-multipart faiss-cpu numpy google-auth
+uvicorn backend.app:app --reload --reload-dir backend --host 127.0.0.1 --port 8000
+```
 
-Add your preferred license file (`LICENSE`) if this repository is intended for public reuse.
+Backend docs:
+
+- `http://127.0.0.1:8000/docs`
+
+### 3. Start frontend
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Frontend:
+
+- `http://127.0.0.1:5173`
+
+## Deployment target for today
+
+The deployment direction you should keep is:
+
+1. Frontend deploy to `Vercel`
+2. Backend deploy separately as `FastAPI`
+3. Use `Supabase` for hosted Postgres and storage
+4. Keep `Ollama` for embeddings where available
+5. Keep `OpenAI` for answer generation and judge
+
+Be explicit during deployment that:
+
+- the current codebase still contains local FAISS/local-storage pieces
+- the cloud path is the target production architecture
+- some public providers may need credential fixes before being enabled in production
+
+## API surface
+
+- `GET /`
+- `POST /assistant/answer`
+- `POST /assistant/chat`
+- `POST /documents/upload`
+- `POST /documents/search/chunks`
+- `GET /documents/latest`
+- `DELETE /documents/{doc_id}`
+- `POST /eval/run`
+- `GET /eval/runs`
+
+## Known limitations right now
+
+- FAISS is still part of the local architecture
+- UI polish is still in progress
+- multi-document summarization behavior is being actively refined
+- Elsevier and IEEE credentials/endpoints are not currently working in this environment
+- cloud deployment architecture is not yet fully completed end to end
+
+## Recommendation
+
+The flow you want to keep is sound:
+
+- aggregate all public scholarly APIs
+- merge and rerank into one final evidence set
+- answer only from evidence
+- attach citations and confidence
+- use judge/calibration as the trust layer
+
+That is the right system design for ScholarRAG.

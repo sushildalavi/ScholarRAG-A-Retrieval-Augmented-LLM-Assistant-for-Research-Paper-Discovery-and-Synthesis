@@ -3,6 +3,7 @@ import io
 import os
 import re
 import time
+import math
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -334,7 +335,7 @@ def _ingest_document(doc_id: int, data: bytes, mime: str, filename: str, title: 
 
 
 @router.post("/search/chunks")
-def search_chunks(payload: dict = None, q: str = None, k: int = 10, doc_id: Optional[int] = None):
+def search_chunks(payload: dict = None, q: str = None, k: int = 10, doc_id: Optional[int] = None, doc_ids: Optional[list[int]] = None):
     """
     Accepts JSON body {q, k, doc_id}. Allows query param q fallback.
     """
@@ -351,27 +352,67 @@ def search_chunks(payload: dict = None, q: str = None, k: int = 10, doc_id: Opti
         raise HTTPException(status_code=400, detail="q (query) is required")
     k = int(payload.get("k") or k or 10)
     doc_id = payload.get("doc_id") if payload.get("doc_id") is not None else doc_id
+    raw_doc_ids = payload.get("doc_ids")
+    if raw_doc_ids is not None:
+        try:
+            doc_ids = [int(x) for x in raw_doc_ids if x is not None]
+        except Exception:
+            raise HTTPException(status_code=400, detail="doc_ids must be a list of integers")
 
     qvec = get_embedding(q)
-    params = [qvec]
-    where_clauses = ["documents.status = 'ready'"]
-    if doc_id:
-        where_clauses.append("chunks.document_id = %s")
-        params.append(doc_id)
-    where = "WHERE " + " AND ".join(where_clauses)
-    rows = fetchall(
-        f"""
-        SELECT chunks.id, chunks.document_id, documents.title, documents.doc_type, chunks.text, chunks.page_no, chunks.chunk_index,
-               chunk_embeddings.vector <-> %s::vector AS distance
-        FROM chunk_embeddings
-        JOIN chunks ON chunk_embeddings.chunk_id = chunks.id
-        JOIN documents ON documents.id = chunks.document_id
-        {where}
-        ORDER BY distance ASC
-        LIMIT {int(k)}
-        """,
-        params,
-    )
+
+    if doc_ids:
+        per_doc_limit = max(1, math.ceil(int(k) / max(1, len(doc_ids))))
+        rows = fetchall(
+            f"""
+            WITH ranked AS (
+              SELECT
+                chunks.id,
+                chunks.document_id,
+                documents.title,
+                documents.doc_type,
+                chunks.text,
+                chunks.page_no,
+                chunks.chunk_index,
+                chunk_embeddings.vector <-> %s::vector AS distance,
+                ROW_NUMBER() OVER (
+                  PARTITION BY chunks.document_id
+                  ORDER BY chunk_embeddings.vector <-> %s::vector ASC
+                ) AS doc_rank
+              FROM chunk_embeddings
+              JOIN chunks ON chunk_embeddings.chunk_id = chunks.id
+              JOIN documents ON documents.id = chunks.document_id
+              WHERE documents.status = 'ready'
+                AND chunks.document_id = ANY(%s)
+            )
+            SELECT id, document_id, title, doc_type, text, page_no, chunk_index, distance
+            FROM ranked
+            WHERE doc_rank <= {per_doc_limit}
+            ORDER BY distance ASC
+            LIMIT {int(k)}
+            """,
+            [qvec, qvec, doc_ids],
+        )
+    else:
+        params = [qvec]
+        where_clauses = ["documents.status = 'ready'"]
+        if doc_id:
+            where_clauses.append("chunks.document_id = %s")
+            params.append(doc_id)
+        where = "WHERE " + " AND ".join(where_clauses)
+        rows = fetchall(
+            f"""
+            SELECT chunks.id, chunks.document_id, documents.title, documents.doc_type, chunks.text, chunks.page_no, chunks.chunk_index,
+                   chunk_embeddings.vector <-> %s::vector AS distance
+            FROM chunk_embeddings
+            JOIN chunks ON chunk_embeddings.chunk_id = chunks.id
+            JOIN documents ON documents.id = chunks.document_id
+            {where}
+            ORDER BY distance ASC
+            LIMIT {int(k)}
+            """,
+            params,
+        )
     return {"results": rows}
 
 

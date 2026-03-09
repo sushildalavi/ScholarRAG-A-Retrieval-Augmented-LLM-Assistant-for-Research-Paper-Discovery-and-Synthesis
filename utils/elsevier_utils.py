@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 ELSEVIER_URL = "https://api.elsevier.com/content/search/sciencedirect"
 MAX_RETRIES = 3
+_AUTH_DISABLED = False
 
 
 def _backoff(attempt: int) -> float:
@@ -17,9 +18,12 @@ def _backoff(attempt: int) -> float:
 
 
 def fetch_from_elsevier(query: str, limit: Optional[int] = None, year_from: Optional[int] = None, year_to: Optional[int] = None) -> List[Dict]:
+    global _AUTH_DISABLED
     elsevier_key = os.getenv("ELSEVIER_API_KEY")
     elsevier_max = int(os.getenv("ELSEVIER_MAX_RESULTS", "30")) or 30
     request_timeout = float(os.getenv("ELSEVIER_TIMEOUT", "10"))
+    if _AUTH_DISABLED:
+        return []
     if not elsevier_key:
         logger.debug("ELSEVIER_API_KEY not set; skipping Elsevier fetch.")
         return []
@@ -65,6 +69,11 @@ def fetch_from_elsevier(query: str, limit: Optional[int] = None, year_from: Opti
                 )
             return results
         except requests.RequestException as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status in {401, 403}:
+                logger.warning("Elsevier disabled for this server process due to authorization failure (%s).", status)
+                _AUTH_DISABLED = True
+                return []
             logger.warning("Elsevier request failed (attempt %s/%s): %s", attempt, MAX_RETRIES, exc)
             if attempt == MAX_RETRIES:
                 return []

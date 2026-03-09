@@ -33,6 +33,7 @@ from utils.logging_utils import setup_file_logger, log_json
 from backend.public_search import public_live_search
 from backend.public_web import public_web_search
 from backend.services.db import fetchall, fetchone, execute
+from backend.services.embeddings import get_embedding as _query_embedding
 from backend.services.nli import entailment_prob
 from backend.services.judge import aggregate_judge_report, evaluate_faithfulness
 from backend.confidence import build_confidence, score_percent
@@ -361,6 +362,171 @@ def _build_uploaded_related_work_fallback(citations: list[dict]) -> str:
         "Here are the most relevant excerpts:\n"
         + "\n".join(lines)
     )
+
+
+def _build_uploaded_evidence_fallback(query: str, citations: list[dict]) -> str:
+    """
+    Deterministic fallback for uploaded docs when the LLM answer fails citation coverage.
+    Keeps the response grounded in retrieved snippets instead of collapsing to abstention.
+    """
+    if not citations:
+        return "I couldn’t find enough evidence in your uploaded documents for that query."
+
+    unique_docs = {
+        (c.get("title") or f"Document {c.get('doc_id', '?')}")
+        for c in citations
+        if c.get("title") or c.get("doc_id") is not None
+    }
+    multi_doc = len(unique_docs) > 1
+    lead = "Here is a grounded summary from the selected uploaded evidence"
+    if _is_uploaded_doc_summary_query(query):
+        lead = "Here is a grounded summary from the uploaded documents" if multi_doc else "Here is a grounded summary from the uploaded document"
+    grouped: dict[str, list[tuple[int, str]]] = {}
+    for i, c in enumerate(citations[:6], start=1):
+        title = c.get("title") or f"Document {c.get('doc_id', '?')}"
+        page = c.get("page")
+        snippet = re.sub(r"\s+", " ", (c.get("snippet") or "").strip())
+        snippet = re.split(r"(?:\s*[|•]\s*|\s{2,})", snippet)[0]
+        snippet = re.split(r"(?<=[.!?;])\s+", snippet)[0]
+        snippet = snippet[:180].strip(" -:")
+        header = f"{title} (p.{page})" if page is not None else title
+        grouped.setdefault(header, [])
+        if snippet:
+            grouped[header].append((i, snippet))
+
+    sections = []
+    for header, items in grouped.items():
+        joined = " ".join(f"{snippet} [S{idx}]" for idx, snippet in items[:2]).strip()
+        if joined:
+            prefix = f"{header}: " if multi_doc else "- "
+            sections.append(f"{prefix}{joined}" if multi_doc else f"- {header}: {joined}")
+        else:
+            sections.append(header if multi_doc else f"- {header}")
+
+    return f"{lead}:\n" + "\n".join(sections)
+
+
+def _rebalance_uploaded_multi_doc_citations(citations: list[dict], doc_ids: list[int] | None, k: int) -> list[dict]:
+    if not citations or not doc_ids or len(doc_ids) <= 1:
+        return citations
+
+    by_doc: dict[int, list[dict]] = {}
+    ordered_doc_ids: list[int] = []
+    for c in citations:
+        did = c.get("doc_id")
+        if did is None:
+            continue
+        did = int(did)
+        by_doc.setdefault(did, []).append(c)
+        if did not in ordered_doc_ids:
+            ordered_doc_ids.append(did)
+
+    if len(by_doc) <= 1:
+        return citations
+
+    for did in by_doc:
+        by_doc[did] = sorted(
+            by_doc[did],
+            key=lambda item: (
+                -float(item.get("rerank_norm", item.get("rerank_raw", item.get("sim_score", 0.0))) or 0.0),
+                -float(item.get("sim_score", 0.0) or 0.0),
+            ),
+        )
+
+    balanced: list[dict] = []
+    seen: set[tuple[int | None, int | None]] = set()
+    max_rounds = max(len(rows) for rows in by_doc.values())
+    for idx in range(max_rounds):
+        for did in doc_ids:
+            rows = by_doc.get(int(did), [])
+            if idx >= len(rows):
+                continue
+            row = rows[idx]
+            key = (row.get("doc_id"), row.get("chunk_id"))
+            if key in seen:
+                continue
+            seen.add(key)
+            balanced.append(row)
+            if len(balanced) >= int(k):
+                return balanced
+
+    return balanced or citations
+
+
+def _build_multi_doc_uploaded_summary(citations: list[dict], doc_ids: list[int] | None) -> str:
+    if not citations or not doc_ids or len(doc_ids) <= 1:
+        return _build_uploaded_evidence_fallback("summary", citations)
+
+    grouped: dict[int, list[dict]] = {}
+    for c in citations:
+        did = c.get("doc_id")
+        if did is None:
+            continue
+        grouped.setdefault(int(did), []).append(c)
+
+    sections: list[str] = []
+    for did in doc_ids:
+        rows = grouped.get(int(did), [])
+        if not rows:
+            continue
+        title = rows[0].get("title") or f"Document {did}"
+        bullets: list[str] = []
+        for row in rows[:2]:
+            sid = row.get("id")
+            page = row.get("page")
+            snippet = re.sub(r"\s+", " ", (row.get("snippet") or "").strip())
+            snippet = re.split(r"(?:\s*[|•]\s*|\s{2,})", snippet)[0]
+            snippet = re.split(r"(?<=[.!?;])\s+", snippet)[0]
+            snippet = snippet[:170].strip(" -:")
+            if not snippet:
+                continue
+            cite = f" [S{sid}]" if sid else ""
+            page_prefix = f"(p.{page}) " if page is not None else ""
+            bullets.append(f"- {page_prefix}{snippet}{cite}")
+        if bullets:
+            sections.append(f"{title}\n" + "\n".join(bullets))
+
+    if not sections:
+        return _build_uploaded_evidence_fallback("summary", citations)
+
+    combined_takeaways: list[str] = []
+    for did in doc_ids:
+        rows = grouped.get(int(did), [])
+        if not rows:
+            continue
+        title = rows[0].get("title") or f"Document {did}"
+        first = rows[0]
+        sid = first.get("id")
+        cite = f" [S{sid}]" if sid else ""
+        snippet = re.sub(r"\s+", " ", (first.get("snippet") or "").strip())
+        snippet = re.split(r"(?:\s*[|•]\s*|\s{2,})", snippet)[0]
+        snippet = re.split(r"(?<=[.!?;])\s+", snippet)[0]
+        snippet = snippet[:120].strip(" -:")
+        if snippet:
+            combined_takeaways.append(f"- {title}: {snippet}{cite}")
+
+    parts = ["Here is a grounded cross-document summary:"]
+    parts.extend(sections)
+    if combined_takeaways:
+        parts.append("Combined takeaways")
+        parts.extend(combined_takeaways)
+    return "\n\n".join(parts)
+
+
+def _is_explicit_uploaded_summary_request(query: str) -> bool:
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    markers = [
+        "summarize the selected uploaded document",
+        "summarize the selected uploaded documents",
+        "organize the response by document",
+        "combined takeaways",
+        "extract the key skills",
+        "extract the key skills, topics, or main points from each selected uploaded document",
+        "what evidence best supports the main claims in each selected uploaded document",
+    ]
+    return any(marker in q for marker in markers)
 
 
 def _source_breakdown(citations: list[dict]) -> dict[str, int]:
@@ -743,6 +909,13 @@ def _is_uploaded_doc_summary_query(query: str) -> bool:
         "summary of the paper",
         "tell me about the attached",
         "tell me about this document",
+        "tell me about the uploaded doc",
+        "tell me about the uploaded document",
+        "tell me about my document",
+        "tell me about my doc",
+        "summarize this resume",
+        "what skills are listed in this resume",
+        "summarize this document",
     )
     return any(c in q for c in cues)
 
@@ -1175,10 +1348,17 @@ def assistant_answer(
     query = payload.get("query") or ""
     scope = payload.get("scope") or "uploaded"
     doc_id = payload.get("doc_id")
+    raw_doc_ids = payload.get("doc_ids")
+    doc_ids: list[int] | None = None
     try:
         doc_id = int(doc_id) if doc_id is not None else None
     except Exception:
         doc_id = None
+    if isinstance(raw_doc_ids, list):
+        try:
+            doc_ids = [int(x) for x in raw_doc_ids if x is not None]
+        except Exception:
+            doc_ids = None
     k = int(payload.get("k") or 10)
     multi_hop = bool(payload.get("multi_hop"))
     debug_confidence = bool(payload.get("debug_confidence"))
@@ -1194,7 +1374,8 @@ def assistant_answer(
     qnorm = query.strip().lower()
     doc_summary_intent = _is_uploaded_doc_summary_query(query)
     related_work_intent = _is_related_work_query(query)
-    doc_id = _resolve_effective_doc_id(doc_id, scope, query)
+    if not doc_ids:
+        doc_id = _resolve_effective_doc_id(doc_id, scope, query)
     requested_public_source = _requested_public_source(query)
     if related_work_intent and scope == "uploaded":
         # Sense-comparison is not useful for related-work extraction from one paper.
@@ -1232,6 +1413,11 @@ def assistant_answer(
         and not any(t in qnorm for t in research_cues)
     )
     is_research = any(t in qnorm for t in research_cues) or len(qnorm.split()) >= 6
+    is_public_lookup = (
+        _is_general_knowledge_query(query)
+        or _is_related_work_query(query)
+        or _is_company_intent_query(query)
+    )
 
     if is_ui_help:
         answer = (
@@ -1263,7 +1449,7 @@ def assistant_answer(
         return {"answer": answer, "citations": []}
 
     # Keep uploaded-doc questions in retrieval mode even when short/colloquial.
-    if not is_research and scope != "uploaded":
+    if not is_research and not is_public_lookup and scope != "uploaded":
         try:
             answer = _chat_answer(query)
         except Exception as exc:
@@ -1302,7 +1488,7 @@ def assistant_answer(
     def fetch_context(q: str, mode: str):
         local_citations = []
         if mode == "uploaded":
-            results = search_uploaded_chunks(q, k=k, doc_id=doc_id)["results"]
+            results = search_uploaded_chunks({"q": q, "k": k, "doc_id": doc_id, "doc_ids": doc_ids})["results"]
             distances = [float(r.get("distance", 1.0) or 1.0) for r in results] or [1.0]
             cosines = [max(-1.0, min(1.0, 1.0 - d)) for d in distances] or [0.0]
             min_s, max_s = min(cosines), max(cosines)
@@ -1336,7 +1522,18 @@ def assistant_answer(
                 )
             local_citations = _prune_uploaded_citations(q, local_citations)
         elif mode == "public":
-            docs = public_live_search(q, k=min(k, 8), source_only=requested_public_source)
+            nonlocal public_provider_status
+            public_resp = public_live_search(q, k=min(k, 8), source_only=requested_public_source, return_metadata=True)
+            docs = public_resp.get("results", [])
+            for provider_name, meta in (public_resp.get("provider_status", {}) or {}).items():
+                current = public_provider_status.get(provider_name, {})
+                public_provider_status[provider_name] = {
+                    "queried": True,
+                    "variant": meta.get("variant") or current.get("variant"),
+                    "fetched": max(int(current.get("fetched", 0) or 0), int(meta.get("fetched", 0) or 0)),
+                    "selected": max(int(current.get("selected", 0) or 0), int(meta.get("selected", 0) or 0)),
+                    "contributed": bool(current.get("contributed")) or bool(meta.get("contributed")),
+                }
             source_count = len({(d.get("source") or d.get("venue") or "public").lower() for d in docs})
             sims = [float(d.get("_sim", 0.0) or 0.0) for d in docs] or [0.0]
             min_s, max_s = min(sims), max(sims)
@@ -1400,6 +1597,7 @@ def assistant_answer(
     public_hits = 0
     uploaded_strength = 0.0
     uploaded_overlap = 0.0
+    public_provider_status: dict[str, dict] = {}
 
     if scope == "uploaded":
         if multi_hop and (" and " in query or ";" in query or "," in query):
@@ -1417,7 +1615,8 @@ def assistant_answer(
             )
             citations.extend(fetch_context(related_probe, "uploaded"))
 
-        if allow_general_background and (_is_general_knowledge_query(query) or _is_company_intent_query(query)):
+        explicit_uploaded_summary = _is_explicit_uploaded_summary_request(query)
+        if allow_general_background and not explicit_uploaded_summary and (_is_general_knowledge_query(query) or _is_company_intent_query(query)):
             public_citations = fetch_context(query, "public")
             public_citations = _prune_public_citations(query, public_citations)
             if not public_citations and ENABLE_WEB_FALLBACK:
@@ -1439,7 +1638,7 @@ def assistant_answer(
                 or (uploaded_hits < 3 and uploaded_strength < 0.52)
             )
         )
-        if weak_uploaded and allow_general_background:
+        if weak_uploaded and allow_general_background and not explicit_uploaded_summary:
             used_public_fallback = True
             public_citations = fetch_context(query, "public")
             public_citations = _prune_public_citations(query, public_citations)
@@ -1535,7 +1734,7 @@ def assistant_answer(
             },
         }
 
-    if scope == "uploaded" and allow_general_background and _is_general_knowledge_query(query):
+    if scope == "uploaded" and allow_general_background and not _is_explicit_uploaded_summary_request(query) and _is_general_knowledge_query(query):
         primary = _primary_anchor_term(query)
         has_public_primary = any(
             (c.get("source") or "").lower() != "uploaded"
@@ -1599,7 +1798,7 @@ def assistant_answer(
             citations = public_only[:k]
     # For definition-style questions, don't get stuck on resume/course-only evidence:
     # automatically try public evidence once before forcing a scope-limited response.
-    if scope == "uploaded" and _needs_scope_limited_answer(query, citations):
+    if scope == "uploaded" and not _is_explicit_uploaded_summary_request(query) and _needs_scope_limited_answer(query, citations):
         public_citations = fetch_context(query, "public")
         public_citations = _prune_public_citations(query, public_citations)
         if not public_citations and ENABLE_WEB_FALLBACK:
@@ -1756,6 +1955,11 @@ def assistant_answer(
         "8) Respect source scope labels. If scope is personal_profile or course_material, do not generalize claims as "
         "global company/world facts unless corroborated by public_reference sources.\n"
         "9) When evidence only covers a person's role at a company, explicitly say that scope limitation.\n"
+        "10) For definition, overview, or 'tell me about' questions, format the answer as:\n"
+        "- a one-sentence definition/overview\n"
+        "- 2 to 4 short bullets for key points\n"
+        "- one short note on limitations or scope if needed\n"
+        "Keep the writing clean and non-repetitive.\n"
         f"{compare_instruction}\n"
         f"Question:\n{query}\n\nContext:\n{context}\n"
     )
@@ -1799,6 +2003,9 @@ def assistant_answer(
             citation_coverage_par, unsupported_claims, paragraph_count = _citation_coverage_stats(answer)
         elif scope == "uploaded" and related_work_intent and citations:
             answer = _build_uploaded_related_work_fallback(citations)
+            citation_coverage_par, unsupported_claims, paragraph_count = _citation_coverage_stats(answer)
+        elif scope == "uploaded" and citations:
+            answer = _build_uploaded_evidence_fallback(query, citations)
             citation_coverage_par, unsupported_claims, paragraph_count = _citation_coverage_stats(answer)
         else:
             evidence_label = _scope_evidence_label(scope)
@@ -1858,12 +2065,25 @@ def assistant_answer(
 
     all_used_dropped = citations and all(not c.get("used_in_answer") for c in citations)
     if all_used_dropped and answer.strip():
-        answer = (
-            "I could only retrieve potential evidence, but the extracted claims do not clear the M/S/A support threshold "
-            "for a citation-grounded answer. Please clarify the query or add more specific sources."
-        )
-        citation_coverage_par = 0.0
-        unsupported_claims = 1
+        if scope == "uploaded" and citations:
+            answer = _build_uploaded_evidence_fallback(query, citations)
+            citation_coverage_par, unsupported_claims, paragraph_count = _citation_coverage_stats(answer)
+        else:
+            answer = (
+                "I could only retrieve potential evidence, but the extracted claims do not clear the M/S/A support threshold "
+                "for a citation-grounded answer. Please clarify the query or add more specific sources."
+            )
+            citation_coverage_par = 0.0
+            unsupported_claims = 1
+
+    if scope == "uploaded" and doc_ids and len(doc_ids) > 1:
+        citations = _rebalance_uploaded_multi_doc_citations(citations, doc_ids, k)
+        for i, c in enumerate(citations, start=1):
+            c["id"] = i
+        if _is_uploaded_doc_summary_query(query):
+            answer = _build_multi_doc_uploaded_summary(citations, doc_ids)
+            citations = _apply_usage_boost(citations, answer)
+            citation_coverage_par, unsupported_claims, paragraph_count = _citation_coverage_stats(answer)
 
     cited_count = sum(1 for c in citations if c.get("used_in_answer"))
     if run_judge:
@@ -1954,6 +2174,7 @@ def assistant_answer(
             "used_public_fallback": used_public_fallback,
             "context_count": len(citations),
             "citations": len(citations),
+            "public_provider_status": public_provider_status,
             "trust": trust,
             "confidence_score": confidence.get("score"),
             "latency_ms": latency_ms,
@@ -2030,6 +2251,7 @@ def assistant_answer(
             "uploaded_overlap": uploaded_overlap,
             "used_public_fallback": used_public_fallback,
             "source_breakdown": _source_breakdown(citations),
+            "public_provider_status": public_provider_status,
         },
     }
 
@@ -2539,17 +2761,12 @@ except RuntimeError as err:
     print(f"❌ {err}")
     client = None
 
-EMBED_MODEL = "text-embedding-3-small"  # aligned with 1536-dim pgvector schema
-
 # Logger for observability
 REQUEST_LOG = setup_file_logger(LOG_DIR / "requests.jsonl")
 
 def get_embedding(text: str) -> np.ndarray:
     """Generate embedding vector for a query string."""
-    if client is None:
-        raise HTTPException(status_code=503, detail="OpenAI client not configured.")
-    response = client.embeddings.create(model=EMBED_MODEL, input=[text])
-    return np.array([response.data[0].embedding], dtype="float32")
+    return np.array([_query_embedding(text)], dtype="float32")
 
 
 
