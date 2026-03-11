@@ -7,6 +7,7 @@ import {
   JudgeRunPayload,
   JudgeRunResponse,
   JudgeRunSummary,
+  LatestResearchResponse,
   MsaCalibrationPayload,
   MsaCalibrationResponse,
   MsaCalibrationLatest,
@@ -145,5 +146,14 @@ export const api = {
 
   async getLatestCalibration(): Promise<MsaCalibrationLatest> {
     return jsonRequest('/confidence/calibration');
+  },
+
+  async latestResearch(params?: { topic?: string; limit?: number; days?: number }): Promise<LatestResearchResponse> {
+    const search = new URLSearchParams();
+    if (params?.topic) search.set('topic', params.topic);
+    if (params?.limit) search.set('limit', String(params.limit));
+    if (params?.days) search.set('days', String(params.days));
+    const qs = search.toString();
+    return jsonRequest(`/research/latest${qs ? `?${qs}` : ''}`);
   },
 };

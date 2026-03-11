@@ -74,6 +74,7 @@ from backend.services.assistant_utils import (
     _uploaded_evidence_strength,
 )
 from backend.services.embeddings import healthcheck_embeddings
+from backend.services.research_feed import latest_research_feed
 from backend.services.nli import entailment_prob
 from backend.services.judge import aggregate_judge_report, evaluate_faithfulness
 from backend.confidence import build_confidence, score_percent
@@ -1736,31 +1737,18 @@ def home():
 def embeddings_health():
     return healthcheck_embeddings()
 
+@app.get("/research/latest")
+def research_latest(
+    topic: str | None = Query(default=None, description="Optional research topic"),
+    limit: int = Query(default=8, ge=1, le=24),
+    days: int = Query(default=45, ge=1, le=365),
+):
+    return latest_research_feed(topic=topic, limit=limit, days=days)
+
 @app.get("/feed/latest")
 def latest_papers(limit: int = 10):
-    """Return latest indexed papers from Postgres."""
-    rows = fetchall(
-        """
-        SELECT title, year, paper_id, source, source_url, abstract
-        FROM papers
-        ORDER BY COALESCE(year, 0) DESC, created_at DESC
-        LIMIT %s
-        """,
-        [max(1, limit)],
-    )
-    return {
-        "results": [
-            {
-                "title": row.get("title", "Untitled"),
-                "year": row.get("year"),
-                "paper_id": row.get("paper_id"),
-                "source": row.get("source"),
-                "url": row.get("source_url"),
-                "summary": (row.get("abstract") or "")[:280],
-            }
-            for row in rows
-        ]
-    }
+    """Compatibility alias for the landing/latest research feed."""
+    return latest_research_feed(limit=limit)
 
 @app.get("/search")
 def search_papers(query: str = Query(..., description="Search query text"), k: int = 5):

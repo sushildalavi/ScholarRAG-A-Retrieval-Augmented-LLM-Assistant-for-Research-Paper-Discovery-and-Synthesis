@@ -290,6 +290,30 @@ export type ChatMessage = {
   created_at?: string;
 };
 
+export type LatestResearchPaper = {
+  provider: string;
+  id?: string;
+  title: string;
+  abstract?: string;
+  authors?: string[];
+  year?: number | null;
+  published_at?: string | null;
+  url?: string | null;
+  pdf_url?: string | null;
+  venue?: string | null;
+  doi?: string | null;
+  citation_count?: number;
+  topics?: string[];
+  why_relevant?: string;
+};
+
+export type LatestResearchResponse = {
+  topic?: string | null;
+  days: number;
+  results: LatestResearchPaper[];
+  provider_status?: Record<string, { ok?: boolean; count?: number; error?: string }>;
+};
+
 export type ChatSession = {
   session_id: number;
   messages: ChatMessage[];

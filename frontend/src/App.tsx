@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { Session as SupabaseSession, User as SupabaseUser } from '@supabase/supabase-js';
 import { API_BASE, api } from './api/client';
 import {
   Citation, ConfidenceObject, DocumentRow, EvalCase,
@@ -8,9 +9,11 @@ import {
   JudgeCasePayload, JudgeRunResponse, JudgeRunSummary,
   MsaCalibrationPayload, MsaCalibrationResponse, MsaCalibrationLatest,
 } from './api/types';
+import { LandingPage } from './components/LandingPage';
+import { getSupabaseClient } from './lib/supabase';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type Page = 'studio' | 'eval';
+type Page = 'landing' | 'studio' | 'eval';
 
 type UiMessage = {
   role: 'you' | 'assistant';
@@ -498,6 +501,18 @@ function isLiteratureQuery(text: string): boolean {
   return (
     /\b(show me papers|find papers|give me papers|list papers|relevant papers|sources|citations|bibliography)\b/.test(q) ||
     /\b(in the literature|recent papers|recent research|what do papers say)\b/.test(q)
+  );
+}
+
+function isDocumentGroundedModeQuery(text: string, hasSelectedDocs: boolean): boolean {
+  const q = text.trim().toLowerCase();
+  if (!q) return false;
+  if (isExplicitDocumentQuery(q)) return true;
+  if (!hasSelectedDocs) return false;
+  if (isLiteratureQuery(q)) return false;
+  return (
+    /\b(summarize|summary|key points?|main claims?|main findings?|supporting evidence|evidence|gaps?|risks?|skills?|topics?|experience|education|timeline|dates?|section|sections|page|pages|extract|highlight|from the selected|across these)\b/.test(q) ||
+    /\b(what|which|where|when|who|how)\b.*\b(in|from|across)\b/.test(q)
   );
 }
 
@@ -1030,23 +1045,24 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
         setLoading(false);
         return;
       }
-      if (hasUploads && selectedDocs.length === 0 && isExplicitDocumentQuery(q)) {
-        streamMessage(
-          'Select one or more documents first, or ask a workspace-wide question without referring to "this document".',
-          { citations: [] },
-        );
-        setLoading(false);
-        return;
-      }
-      if (!allowGeneralBackground && isLiteratureQuery(q)) {
-        streamMessage(
-          selectedDocs.length > 0
-            ? 'Docs only mode is active. Ask about the selected document(s), or switch to Public research if you want papers, citations, or literature search.'
-            : 'Docs only mode is active. Select one or more documents for grounded answers, or switch to Public research if you want papers, citations, or literature search.',
-          { citations: [] },
-        );
-        setLoading(false);
-        return;
+      const hasSelectedDocs = selectedDocs.length > 0;
+      if (!allowGeneralBackground) {
+        if (!hasSelectedDocs) {
+          streamMessage(
+            'Docs only mode is active. Select one or more uploaded documents for grounded answers, or switch to Public research for general research questions.',
+            { citations: [] },
+          );
+          setLoading(false);
+          return;
+        }
+        if (!isDocumentGroundedModeQuery(q, hasSelectedDocs)) {
+          streamMessage(
+            'Docs only mode is active. Ask about the selected document(s), or switch to Public research for papers, general concepts, or literature search.',
+            { citations: [] },
+          );
+          setLoading(false);
+          return;
+        }
       }
       const forcePublicWithoutSelection = allowGeneralBackground && hasUploads && selectedDocs.length === 0;
       const scope: 'uploaded' | 'public' =
@@ -1385,27 +1401,39 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
         <div className="topbar">
           <div className="topbar-left">
             <div className="topbar-kicker">Research workspace</div>
-            <div className="topbar-title">
-              {hasMulti
-                ? `${selectedRows.length} documents selected`
-                : (activeDoc ? activeDoc.title : activeSessionTitle)}
+            <div className="topbar-title-row">
+              <div className="topbar-title">
+                {hasMulti
+                  ? `${selectedRows.length} documents selected`
+                  : (activeDoc ? activeDoc.title : activeSessionTitle)}
+              </div>
+              {selectedRows.length > 0 && (
+                <span className="topbar-state-pill">
+                  {hasMulti ? 'Cross-document' : 'Grounded doc mode'}
+                </span>
+              )}
             </div>
             <div className="topbar-sub">
               {hasMulti
-                ? 'Cross-document analysis mode'
-                : (activeDoc ? 'Grounded research assistant' : 'Session-based research assistant')}
+                ? 'Ask comparative questions, extract shared evidence, or compare claims across the selected files.'
+                : (activeDoc
+                  ? 'Use the selected document as the only answer context in docs mode.'
+                  : 'Start a session, switch modes deliberately, and inspect the evidence in the panel on the right.')}
             </div>
           </div>
           <div className="topbar-right">
-            <div className="seg-toggle">
-              <button
-                className={!allowGeneralBackground ? 'active' : ''}
-                onClick={() => setAllowGeneralBackground(false)}
-              >Docs only</button>
-              <button
-                className={allowGeneralBackground ? 'active' : ''}
-                onClick={() => setAllowGeneralBackground(true)}
-              >Public research</button>
+            <div className="topbar-control-block">
+              <div className="topbar-control-label">Mode</div>
+              <div className="seg-toggle">
+                <button
+                  className={!allowGeneralBackground ? 'active' : ''}
+                  onClick={() => setAllowGeneralBackground(false)}
+                >Docs only</button>
+                <button
+                  className={allowGeneralBackground ? 'active' : ''}
+                  onClick={() => setAllowGeneralBackground(true)}
+                >Public research</button>
+              </div>
             </div>
           </div>
         </div>
@@ -1417,7 +1445,7 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
               {allowGeneralBackground ? 'Public research enabled' : 'Docs only mode'}
             </span>
             {selectedRows.length === 0 && !allowGeneralBackground && (
-              <span className="context-chip muted">No documents selected</span>
+              <span className="context-chip muted">Select a document to begin grounded analysis</span>
             )}
             {selectedPreview.map((doc) => (
               <button key={doc.id} className="context-chip" onClick={() => toggleDoc(doc.id)}>
@@ -1564,7 +1592,7 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
                     ? 'Search public research or ask about your documents…'
                     : selectedDocs.length > 0
                       ? 'Ask about your selected documents…'
-                      : 'Select a document, or switch to Public research for general questions…'
+                      : 'Select a document to begin, or switch to Public research…'
                 }
                 disabled={loading}
                 onChange={(e) => setInput(e.target.value)}
@@ -1612,20 +1640,79 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
 
 // ── Root with routing ─────────────────────────────────────────────────────────
 export default function App() {
+  const supabase = getSupabaseClient();
   const [page, setPage] = useState<Page>(() =>
-    window.location.pathname.startsWith('/eval') ? 'eval' : 'studio',
+    window.location.pathname.startsWith('/eval')
+      ? 'eval'
+      : window.location.pathname.startsWith('/app')
+        ? 'studio'
+        : 'landing',
   );
+  const [authSession, setAuthSession] = useState<SupabaseSession | null>(null);
+  const [authUser, setAuthUser] = useState<SupabaseUser | null>(null);
 
   useEffect(() => {
     const handler = () =>
-      setPage(window.location.pathname.startsWith('/eval') ? 'eval' : 'studio');
+      setPage(
+        window.location.pathname.startsWith('/eval')
+          ? 'eval'
+          : window.location.pathname.startsWith('/app')
+            ? 'studio'
+            : 'landing',
+      );
     window.addEventListener('popstate', handler);
     return () => window.removeEventListener('popstate', handler);
   }, []);
 
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data }) => {
+      setAuthSession(data.session ?? null);
+      setAuthUser(data.session?.user ?? null);
+    });
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthSession(session ?? null);
+      setAuthUser(session?.user ?? null);
+    });
+    return () => subscription.unsubscribe();
+  }, [supabase]);
+
   const goEval = () => { window.history.pushState({}, '', '/eval'); setPage('eval'); };
-  const goStudio = () => { window.history.pushState({}, '', '/'); setPage('studio'); };
+  const goStudio = () => { window.history.pushState({}, '', '/app'); setPage('studio'); };
+  const goLanding = () => { window.history.pushState({}, '', '/'); setPage('landing'); };
+
+  const handleGoogleSignIn = async () => {
+    if (!supabase) {
+      goStudio();
+      return;
+    }
+    const redirectTo = `${window.location.origin}/app`;
+    await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo },
+    });
+  };
+
+  const handleSignOut = async () => {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    goLanding();
+  };
 
   if (page === 'eval') return <EvalPage onBack={goStudio} />;
+  if (page === 'landing') {
+    return (
+      <LandingPage
+        authAvailable={Boolean(supabase)}
+        signedIn={Boolean(authSession)}
+        userLabel={authUser?.email || authUser?.user_metadata?.full_name || null}
+        onOpenWorkspace={goStudio}
+        onSignIn={handleGoogleSignIn}
+        onSignOut={handleSignOut}
+      />
+    );
+  }
   return <StudioPage onNavigateEval={goEval} />;
 }
