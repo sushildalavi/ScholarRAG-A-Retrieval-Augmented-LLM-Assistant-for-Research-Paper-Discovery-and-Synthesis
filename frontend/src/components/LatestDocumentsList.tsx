@@ -22,7 +22,7 @@ export function LatestDocumentsList({ documents, selectedIds = [], onToggle, onD
             key={d.id}
             className={`library-item ${selected ? 'selected' : ''}`}
           >
-            <button className={`lib-check ${selected ? 'selected' : ''}`} onClick={() => onToggle(d.id)} aria-label={selected ? 'Deselect document' : 'Select document'} />
+            <button type="button" className={`lib-check ${selected ? 'selected' : ''}`} onClick={() => onToggle(d.id)} aria-label={selected ? 'Deselect document' : 'Select document'} />
             <div className="lib-icon" aria-hidden="true" onClick={() => onToggle(d.id)} />
             <div className="lib-meta" onClick={() => onToggle(d.id)}>
               <div className="lib-title" title={d.title}>{d.title}</div>
@@ -30,7 +30,7 @@ export function LatestDocumentsList({ documents, selectedIds = [], onToggle, onD
                 <span className={`badge ${statusClass}`}>{statusText}</span>
               </div>
             </div>
-            <button className="lib-delete" title="Delete" onClick={() => onDelete(d.id)}>×</button>
+            <button type="button" className="lib-delete" title="Delete" onClick={() => onDelete(d.id)}>×</button>
           </div>
         );
       })}

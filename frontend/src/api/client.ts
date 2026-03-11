@@ -13,7 +13,10 @@ import {
 } from './types';
 import { ChatSession } from './types';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000';
+export const API_BASE =
+  import.meta.env.VITE_API_BASE_URL ||
+  import.meta.env.VITE_API_BASE ||
+  'http://127.0.0.1:8000';
 
 async function jsonRequest<T>(path: string, opts: RequestInit = {}): Promise<T> {
   try {
@@ -30,7 +33,11 @@ async function jsonRequest<T>(path: string, opts: RequestInit = {}): Promise<T> 
     return res.json() as Promise<T>;
   } catch (e: any) {
     // Normalize network errors
-    throw new Error(e?.message || 'Network error');
+    const msg = e?.message || 'Network error';
+    if (/Failed to fetch/i.test(msg)) {
+      throw new Error(`Backend unreachable at ${API_BASE}`);
+    }
+    throw new Error(msg);
   }
 }
 

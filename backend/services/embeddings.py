@@ -1,11 +1,11 @@
 """
-Embedding provider abstraction used across ScholarRAG.
+Centralized embedding service for ScholarRAG.
 
-Supports:
-- OpenAI embeddings (default)
-- Ollama embeddings (`OLLAMA_EMBED_MODEL`)
-
-The module keeps existing cache-backed API so current callers keep working.
+Production intent:
+- use one embedding model/provider contract everywhere
+- keep query/document prefixing centralized
+- keep storage metadata explicit to avoid mixing vectors from different models
+- support local Ollama and remote Ollama-compatible HTTP endpoints
 """
 
 from __future__ import annotations
@@ -14,43 +14,75 @@ import hashlib
 import json
 import os
 import time
-import urllib.request
 from typing import Dict, Iterable, List
+
+import requests
 
 from backend.services.db import execute, fetchall
 
-try:
-    from openai import OpenAI
-except ImportError:  # pragma: no cover
-    OpenAI = None  # type: ignore
 
-from utils.config import get_openai_api_key
+def _env(name: str, default: str) -> str:
+    value = os.getenv(name)
+    return value.strip() if isinstance(value, str) else default
 
 
-EMBED_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "openai").strip().lower()
-OPENAI_EMBED_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-OPENAI_EMBED_DIM = int(os.getenv("OPENAI_EMBEDDING_DIM", "1536") or 1536)
+EMBEDDING_PROVIDER = _env("EMBEDDING_PROVIDER", "ollama").lower()
+OLLAMA_BASE_URL = _env("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_EMBED_MODEL = _env("OLLAMA_EMBED_MODEL", "mxbai-embed-large")
+EMBEDDING_QUERY_PREFIX = _env(
+    "EMBEDDING_QUERY_PREFIX",
+    "Represent this sentence for searching relevant passages: ",
+)
+EMBEDDING_DOC_PREFIX = _env(
+    "EMBEDDING_DOC_PREFIX",
+    "Represent this document for retrieval: ",
+)
+EMBEDDING_BATCH_SIZE = int(_env("EMBEDDING_BATCH_SIZE", "16") or 16)
+EMBEDDING_TIMEOUT_SECONDS = float(_env("EMBEDDING_TIMEOUT_SECONDS", _env("OLLAMA_EMBED_TIMEOUT", "30")) or 30)
+EMBEDDING_RETRY_ATTEMPTS = int(_env("EMBEDDING_RETRY_ATTEMPTS", "3") or 3)
+EMBEDDING_RETRY_DELAY = float(_env("EMBEDDING_RETRY_DELAY", "0.5") or 0.5)
+EMBEDDING_VERSION = _env("EMBEDDING_VERSION", "mxbai-embed-large-v1")
+EMBEDDING_MAX_QUERY_WORDS = int(_env("EMBEDDING_MAX_QUERY_WORDS", "128") or 128)
+EMBEDDING_MAX_DOC_WORDS = int(_env("EMBEDDING_MAX_DOC_WORDS", "256") or 256)
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
-OLLAMA_EMBED_DIM = int(os.getenv("OLLAMA_EMBED_DIM", "768") or 768)
-# Primary vector size expected by persisted schemas by default.
-EMBED_DIM = int(os.getenv("EMBED_DIM", "1536") or 1536)
-
-OPENAI_TIMEOUT_SECONDS = int(os.getenv("OPENAI_EMBED_TIMEOUT", "15") or 15)
-OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_EMBED_TIMEOUT", "25") or 25)
-STUB_LOG_STEPS = int(os.getenv("EMBED_STUB_LOG_STEPS", "1") or 1)
+# Keep store dimension configurable for backward-compatible pgvector schemas.
+# mxbai-embed-large is 1024-d, but some existing DB schemas still use vector(1536).
+EMBEDDING_RAW_DIM = int(_env("EMBEDDING_RAW_DIM", "1024") or 1024)
+VECTOR_STORE_DIM = int(_env("VECTOR_STORE_DIM", "1536") or 1536)
 
 
-def text_to_hash(text: str) -> str:
-    """Stable SHA256 hash of text."""
+def _hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _trim_or_pad_vector(values: Iterable[float], dim: int) -> List[float]:
+def _cache_key(text: str, kind: str) -> str:
+    material = "::".join(
+        [
+            EMBEDDING_PROVIDER,
+            get_embedding_model(),
+            get_embedding_version(),
+            kind,
+            text,
+        ]
+    )
+    return _hash_text(material)
+
+
+def _trim_or_pad(values: Iterable[float], dim: int) -> List[float]:
+    if isinstance(values, str):
+        raw = values.strip()
+        if not raw:
+            vec = []
+        else:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    values = parsed
+                else:
+                    values = [x for x in raw.strip("[]").split(",") if x.strip()]
+            except Exception:
+                values = [x for x in raw.strip("[]").split(",") if x.strip()]
     vec = [float(v) for v in values]
-    if dim <= 0:
-        return vec
     if len(vec) == dim:
         return vec
     if len(vec) > dim:
@@ -58,218 +90,238 @@ def _trim_or_pad_vector(values: Iterable[float], dim: int) -> List[float]:
     return vec + [0.0] * (dim - len(vec))
 
 
-def _safe_list(value) -> List[float]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        try:
-            return [float(v) for v in value]
-        except Exception:
-            return []
-    # pgvector and other drivers can emit custom sequence-like objects.
+def _prepare_text(text: str, kind: str) -> str:
+    cleaned = " ".join((text or "").split())
+    max_words = EMBEDDING_MAX_QUERY_WORDS if kind == "query" else EMBEDDING_MAX_DOC_WORDS
+    words = cleaned.split()
+    if len(words) <= max_words:
+        return cleaned
+    return " ".join(words[:max_words])
+
+
+def _validate_embedding_payload(payload: dict) -> List[float]:
+    values = payload.get("embedding")
+    if values is None and isinstance(payload.get("embeddings"), list):
+        embeddings = payload.get("embeddings") or []
+        if embeddings and isinstance(embeddings[0], list):
+            values = embeddings[0]
+    if not isinstance(values, list) or not values:
+        raise RuntimeError("Embedding response missing `embedding` list.")
     try:
-        return [float(v) for v in list(value)]
+        out = [float(v) for v in values]
+    except Exception as exc:
+        raise RuntimeError("Embedding response contains non-numeric values.") from exc
+    if len(out) < 128:
+        raise RuntimeError(f"Embedding response too short ({len(out)} dims).")
+    return out
+
+
+def _extract_ollama_error(response: requests.Response) -> str:
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            msg = payload.get("error") or payload.get("message") or payload.get("detail")
+            if msg:
+                return str(msg)
     except Exception:
-        return []
+        pass
+    text = (response.text or "").strip()
+    return text or f"HTTP {response.status_code}"
 
 
-def _client() -> OpenAI:
-    if OpenAI is None:
-        raise RuntimeError("openai package not installed. Install with `pip install openai`.")
-    return OpenAI(api_key=get_openai_api_key())
+def _is_context_length_error(message: str) -> bool:
+    msg = (message or "").lower()
+    return "context length" in msg or "input length exceeds" in msg
 
 
-def _deterministic_stub(text: str) -> List[float]:
-    """Deterministic fallback embedding based on text hash."""
-    h = hashlib.sha256(text.encode("utf-8")).digest()
-    vals = []
-    for i in range(max(1, EMBED_DIM)):
-        byte = h[i % len(h)]
-        vals.append((byte / 127.5) - 1.0)
-    return vals
+def _post_ollama_embedding(text: str) -> List[float]:
+    attempts = [
+        (f"{OLLAMA_BASE_URL}/api/embed", {"model": OLLAMA_EMBED_MODEL, "input": [text]}),
+        (f"{OLLAMA_BASE_URL}/api/embeddings", {"model": OLLAMA_EMBED_MODEL, "prompt": text}),
+    ]
+    last_error: Exception | None = None
+    for url, body in attempts:
+        try:
+            response = requests.post(url, json=body, timeout=EMBEDDING_TIMEOUT_SECONDS)
+            if response.status_code == 404:
+                err = _extract_ollama_error(response)
+                if "model" in err.lower() and "not found" in err.lower():
+                    raise RuntimeError(
+                        f"Ollama model `{OLLAMA_EMBED_MODEL}` is not installed on {OLLAMA_BASE_URL}. "
+                        f"Run `ollama pull {OLLAMA_EMBED_MODEL}` on that host."
+                    )
+                last_error = RuntimeError(f"Ollama 404 from {url}: {err}")
+                continue
+            if response.status_code in (400, 413, 422, 500):
+                err = _extract_ollama_error(response)
+                runtime_err = RuntimeError(err)
+                if _is_context_length_error(err):
+                    raise runtime_err
+                last_error = runtime_err
+                continue
+            response.raise_for_status()
+            payload = response.json()
+            return _validate_embedding_payload(payload)
+        except RuntimeError as exc:
+            if _is_context_length_error(str(exc)):
+                raise
+            last_error = exc
+        except Exception as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Ollama embedding call failed without response.")
 
 
-def _call_openai_embedding(text: str) -> List[float]:
-    client = _client()
-    response = client.embeddings.create(model=OPENAI_EMBED_MODEL, input=[text], timeout=OPENAI_TIMEOUT_SECONDS)
-    return _safe_list(response.data[0].embedding)
-
-
-def _call_openai_embedding_batch(texts: List[str]) -> List[List[float]]:
-    client = _client()
-    response = client.embeddings.create(model=OPENAI_EMBED_MODEL, input=texts, timeout=max(OPENAI_TIMEOUT_SECONDS, 20))
-    out = []
-    for item in getattr(response, "data", []) or []:
-        out.append(_safe_list(item.embedding))
-    if len(out) != len(texts):
-        # Defensive fallback if the API returned partial or malformed order.
-        return [_safe_list(item.embedding) for item in (response.data if hasattr(response, "data") else [])]
-    return out
-
-
-def _call_ollama_embedding(text: str) -> List[float]:
-    url = f"{OLLAMA_BASE_URL}/api/embeddings"
-    payload = {
-        "model": OLLAMA_EMBED_MODEL,
-        "prompt": text,
-    }
-    body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT_SECONDS) as resp:
-        raw = resp.read().decode("utf-8")
-    parsed = json.loads(raw or "{}")
-    return _safe_list(parsed.get("embedding"))
-
-
-def _call_ollama_embedding_batch(texts: List[str]) -> List[List[float]]:
-    # Ollama server can be reliable but we keep a simple per-text loop to avoid
-    # model-specific payload variants and preserve error granularity.
-    out = []
-    for i, text in enumerate(texts, start=1):
-        vec = _retry_call(_call_ollama_embedding, text)
-        out.append(vec)
-        if STUB_LOG_STEPS > 0 and i % max(1, STUB_LOG_STEPS) == 0:
-            # Small throttling hook for high-volume batches.
-            time.sleep(0.0)
-    return out
-
-
-def _retry_call(fn, *args, **kwargs):
-    attempts = int(os.getenv("EMBEDDING_RETRY_ATTEMPTS", "2") or 2)
-    delay = float(os.getenv("EMBEDDING_RETRY_DELAY", "0.4") or 0.4)
+def _retry(fn, *args, **kwargs):
     last_err: Exception | None = None
-    for attempt in range(1, max(1, attempts) + 1):
+    for attempt in range(1, max(1, EMBEDDING_RETRY_ATTEMPTS) + 1):
         try:
             return fn(*args, **kwargs)
-        except Exception as exc:  # pragma: no cover - integration defensive path
+        except Exception as exc:
             last_err = exc
-            if attempt >= attempts:
-                raise
-            time.sleep(delay)
+            if attempt >= EMBEDDING_RETRY_ATTEMPTS:
+                break
+            time.sleep(EMBEDDING_RETRY_DELAY * attempt)
     if last_err is not None:
-        raise last_err
-    raise RuntimeError("embedding retry failed")
+        raise RuntimeError(f"Embedding call failed: {last_err}") from last_err
+    raise RuntimeError("Embedding call failed without exception.")
 
 
-def call_embedding_api(text: str) -> List[float]:
-    """Call selected provider for a single embedding vector."""
-    model_dim = OPENAI_EMBED_DIM if EMBED_PROVIDER == "openai" else OLLAMA_EMBED_DIM
-    dim = EMBED_DIM if EMBED_DIM > 0 else max(1, model_dim)
-    try:
-        if EMBED_PROVIDER == "ollama":
-            return _trim_or_pad_vector(_retry_call(_call_ollama_embedding, text), dim)
-        return _trim_or_pad_vector(_retry_call(_call_openai_embedding, text), dim)
-    except Exception as exc:  # pragma: no cover - runtime fallback for robustness
-        import logging
+def _embed_single(text: str, kind: str) -> List[float]:
+    if EMBEDDING_PROVIDER != "ollama":
+        raise RuntimeError(f"Unsupported embedding provider: {EMBEDDING_PROVIDER}")
+    prefix = EMBEDDING_QUERY_PREFIX if kind == "query" else EMBEDDING_DOC_PREFIX
+    prepared = _prepare_text(text, kind)
+    words = prepared.split()
+    limits = []
+    initial = len(words)
+    if initial:
+        limits = [initial, min(initial, max(96, initial // 2)), min(initial, 128), min(initial, 96), min(initial, 64)]
+    else:
+        limits = [0]
+    deduped_limits = []
+    seen = set()
+    for limit in limits:
+        if limit not in seen:
+            deduped_limits.append(limit)
+            seen.add(limit)
 
-        logging.warning("Embedding API failed (%s). Using deterministic fallback.", exc)
-        return _trim_or_pad_vector(_deterministic_stub(text), dim)
-
-
-def call_embedding_api_batch(texts: List[str]) -> List[List[float]]:
-    """Call selected provider for a batch of embeddings."""
-    if not texts:
-        return []
-
-    dim = EMBED_DIM if EMBED_DIM > 0 else (OPENAI_EMBED_DIM if EMBED_PROVIDER == "openai" else OLLAMA_EMBED_DIM)
-    try:
-        if EMBED_PROVIDER == "ollama":
-            values = _call_ollama_embedding_batch(texts)
-        else:
-            values = _call_openai_embedding_batch(texts)
-        return [_trim_or_pad_vector(v, dim) for v in values]
-    except Exception as exc:  # pragma: no cover - runtime fallback for robustness
-        import logging
-
-        logging.warning("Batch embedding API failed (%s). Using deterministic fallbacks.", exc)
-        return [_trim_or_pad_vector(_deterministic_stub(t), dim) for t in texts]
-
-
-def get_embedding(text: str) -> List[float]:
-    """Fetch embedding from cache or compute and store."""
-    key = text_to_hash(text)
-    rows = fetchall("SELECT embedding FROM embedding_cache WHERE text_hash=%s", [key])
-    if rows:
-        emb = _safe_list(rows[0].get("embedding"))
-        return _trim_or_pad_vector(emb, max(1, EMBED_DIM))
-
-    emb = call_embedding_api(text)
-    execute(
-        """
-        INSERT INTO embedding_cache (text_hash, dim, embedding)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (text_hash) DO NOTHING
-        """,
-        [key, EMBED_DIM, emb],
-    )
-    return emb
+    last_err: Exception | None = None
+    for limit in deduped_limits:
+        attempt_text = " ".join(words[:limit]) if limit > 0 else prepared
+        try:
+            raw = _retry(_post_ollama_embedding, f"{prefix}{attempt_text}")
+            return _trim_or_pad(raw, VECTOR_STORE_DIM)
+        except Exception as exc:
+            last_err = exc
+            if not _is_context_length_error(str(exc)):
+                raise
+            continue
+    if last_err is not None:
+        raise RuntimeError(
+            f"Embedding failed after adaptive truncation for model {OLLAMA_EMBED_MODEL}: {last_err}"
+        ) from last_err
+    raise RuntimeError("Embedding failed without exception.")
 
 
-def _fetch_cached_embeddings(keys: List[str]) -> Dict[str, List[float]]:
+def _fetch_cached(keys: List[str]) -> Dict[str, List[float]]:
     if not keys:
         return {}
-    placeholders = ",".join(["%s"] * len(keys))
     rows = fetchall(
-        f"SELECT text_hash, embedding FROM embedding_cache WHERE text_hash IN ({placeholders})",
+        f"SELECT text_hash, embedding FROM embedding_cache WHERE text_hash IN ({','.join(['%s'] * len(keys))})",
         keys,
     )
     out: Dict[str, List[float]] = {}
     for row in rows:
-        text_hash = row.get("text_hash")
-        if not text_hash:
+        key = row.get("text_hash")
+        if not key:
             continue
-        out[text_hash] = _trim_or_pad_vector(_safe_list(row.get("embedding")), EMBED_DIM)
+        out[key] = _trim_or_pad(row.get("embedding") or [], VECTOR_STORE_DIM)
     return out
 
 
-def get_embeddings(texts: List[str]) -> List[List[float]]:
-    """Fetch embeddings for many texts using cache + batch API calls."""
+def _store_cached(cache_key: str, embedding: List[float]) -> None:
+    execute(
+        """
+        INSERT INTO embedding_cache (text_hash, dim, embedding, provider, model, embedding_version)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (text_hash) DO NOTHING
+        """,
+        [cache_key, VECTOR_STORE_DIM, embedding, get_provider(), get_embedding_model(), get_embedding_version()],
+    )
+
+
+def embed_query(text: str) -> List[float]:
+    if not (text or "").strip():
+        raise RuntimeError("embed_query requires non-empty text.")
+    key = _cache_key(text, "query")
+    cached = _fetch_cached([key]).get(key)
+    if cached:
+        return cached
+    embedding = _embed_single(text, "query")
+    _store_cached(key, embedding)
+    return embedding
+
+
+def embed_documents(texts: List[str]) -> List[List[float]]:
     if not texts:
         return []
+    results: List[List[float]] = []
+    for start in range(0, len(texts), max(1, EMBEDDING_BATCH_SIZE)):
+        batch = texts[start:start + max(1, EMBEDDING_BATCH_SIZE)]
+        keys = [_cache_key(text, "document") for text in batch]
+        cached = _fetch_cached(keys)
+        for key, text in zip(keys, batch):
+            emb = cached.get(key)
+            if emb is None:
+                emb = _embed_single(text, "document")
+                _store_cached(key, emb)
+            results.append(emb)
+    return results
 
-    keys = [text_to_hash(text) for text in texts]
-    cached = _fetch_cached_embeddings(keys)
-    out_by_key: Dict[str, List[float]] = dict(cached)
 
-    missing_texts: List[str] = []
-    missing_keys: List[str] = []
-    for key, text in zip(keys, texts):
-        if key in out_by_key:
-            continue
-        missing_keys.append(key)
-        missing_texts.append(text)
+def healthcheck_embeddings() -> dict:
+    diagnostics = {
+        "provider": get_provider(),
+        "model": get_embedding_model(),
+        "embedding_version": get_embedding_version(),
+        "raw_dim": EMBEDDING_RAW_DIM,
+        "vector_store_dim": VECTOR_STORE_DIM,
+        "base_url": OLLAMA_BASE_URL if get_provider() == "ollama" else None,
+    }
+    probe = embed_query("embedding healthcheck")
+    diagnostics["ok"] = True
+    diagnostics["returned_dim"] = len(probe)
+    diagnostics["max_query_words"] = EMBEDDING_MAX_QUERY_WORDS
+    diagnostics["max_doc_words"] = EMBEDDING_MAX_DOC_WORDS
+    return diagnostics
 
-    if missing_texts:
-        computed = call_embedding_api_batch(missing_texts)
-        for key, emb in zip(missing_keys, computed):
-            emb = _trim_or_pad_vector(emb, EMBED_DIM)
-            out_by_key[key] = emb
-            execute(
-                """
-                INSERT INTO embedding_cache (text_hash, dim, embedding)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (text_hash) DO NOTHING
-                """,
-                [key, EMBED_DIM, emb],
-            )
 
-    return [out_by_key[key] for key in keys]
+# Backward-compatible wrappers for existing callsites.
+def get_embedding(text: str) -> List[float]:
+    return embed_query(text)
+
+
+def get_embeddings(texts: List[str]) -> List[List[float]]:
+    return embed_documents(texts)
 
 
 def get_provider() -> str:
-    return EMBED_PROVIDER
+    return EMBEDDING_PROVIDER
 
 
 def get_embedding_model() -> str:
-    if EMBED_PROVIDER == "ollama":
-        return OLLAMA_EMBED_MODEL
-    return OPENAI_EMBED_MODEL
+    return OLLAMA_EMBED_MODEL if EMBEDDING_PROVIDER == "ollama" else _env("OPENAI_EMBEDDING_MODEL", "text-embedding-3-large")
+
+
+def get_embedding_version() -> str:
+    return EMBEDDING_VERSION
 
 
 def get_embedding_dims() -> int:
-    return EMBED_DIM
+    return VECTOR_STORE_DIM
+
+
+def get_raw_embedding_dims() -> int:
+    return EMBEDDING_RAW_DIM

@@ -200,6 +200,11 @@ def public_live_search(query: str, k: int = 8, source_only: str | None = None, r
     for provider_name, meta in provider_status.items():
         meta["selected"] = final_counts.get(provider_name, 0)
         meta["contributed"] = meta["selected"] > 0
+    logger.info(
+        "public_search provider status query=%r status=%s",
+        query_variants[0] if query_variants else query,
+        provider_status,
+    )
     if return_metadata:
         return {"results": final_results, "provider_status": provider_status}
     return final_results

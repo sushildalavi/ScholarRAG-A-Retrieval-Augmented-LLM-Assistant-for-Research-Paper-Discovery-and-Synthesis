@@ -41,6 +41,9 @@ CREATE INDEX IF NOT EXISTS idx_papers_source ON papers(source);
 -- Embedding cache
 CREATE TABLE IF NOT EXISTS embedding_cache (
     text_hash  TEXT PRIMARY KEY,
+    provider   TEXT DEFAULT 'unknown',
+    model      TEXT DEFAULT 'unknown',
+    embedding_version TEXT DEFAULT 'v1',
     dim        INT,
     embedding  vector(1536),
     created_at TIMESTAMP DEFAULT now()
@@ -76,7 +79,9 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE TABLE IF NOT EXISTS chunk_embeddings (
     id SERIAL PRIMARY KEY,
     chunk_id INT REFERENCES chunks(id) ON DELETE CASCADE,
+    provider TEXT DEFAULT 'unknown',
     model TEXT NOT NULL,
+    embedding_version TEXT DEFAULT 'v1',
     dim INT NOT NULL,
     vector vector(1536),
     created_at TIMESTAMP DEFAULT now()
@@ -84,6 +89,7 @@ CREATE TABLE IF NOT EXISTS chunk_embeddings (
 
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(document_id);
 CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_chunk ON chunk_embeddings(chunk_id);
+CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_model_version ON chunk_embeddings(provider, model, embedding_version);
 -- Optional ANN index (build after data load)
 -- CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_ivfflat ON chunk_embeddings USING ivfflat (vector vector_cosine_ops) WITH (lists = 100);
 

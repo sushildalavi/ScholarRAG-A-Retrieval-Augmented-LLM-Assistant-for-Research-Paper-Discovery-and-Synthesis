@@ -2,13 +2,11 @@
 # app.py — ScholarRAG Backend API
 # ------------------------------
 
-import faiss
 import json
 import numpy as np
 import os
 import time
 import re
-import difflib
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -18,39 +16,83 @@ from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 
 from utils.config import get_openai_api_key
-from backend.retriever import Retriever
-from backend.generator import synthesize_answer
 from backend import auth
 from backend import memory
 from backend import agents
 from backend import pdf_ingest
-from backend.user_store import get_user_index
 from backend import chat
 from fastapi.responses import Response
 from backend.pdf_ingest import search_chunks as search_uploaded_chunks
-from utils.embedding_utils import embed_query, embed_batch_cached
 from utils.logging_utils import setup_file_logger, log_json
 from backend.public_search import public_live_search
 from backend.public_web import public_web_search
 from backend.services.db import fetchall, fetchone, execute
-from backend.services.embeddings import get_embedding as _query_embedding
+from backend.services.assistant_utils import (
+    _apply_usage_boost,
+    _append_public_source_links,
+    _base_confidence,
+    _build_generation_prompt,
+    _build_evidence_id,
+    _build_multi_doc_uploaded_summary,
+    _build_public_source_listing_answer,
+    _build_public_synthesis_fallback,
+    _build_uploaded_evidence_fallback,
+    _build_uploaded_related_work_fallback,
+    _classify_answer_mode,
+    _chunk_query_overlap,
+    _citation_coverage_stats,
+    _clamp01,
+    _compute_citation_msa,
+    _confidence_breakdown,
+    _has_official_company_docs,
+    _humanize_answer_text,
+    _is_company_intent_query,
+    _is_doc_intent_query,
+    _is_doc_visibility_query,
+    _is_entity_level_query,
+    _is_explicit_uploaded_summary_request,
+    _is_general_knowledge_query,
+    _is_related_work_query,
+    _is_uploaded_doc_summary_query,
+    _load_latest_calibration_weights,
+    _normalize_forward,
+    _needs_scope_limited_answer,
+    _normalize_inline_citations,
+    _normalize_source_url,
+    _primary_anchor_term,
+    _prune_public_citations,
+    _prune_uploaded_citations,
+    _query_overlap_strength,
+    _rank_and_trim_citations,
+    _rebalance_uploaded_multi_doc_citations,
+    _requested_public_source,
+    _resolve_effective_doc_id,
+    _scope_evidence_label,
+    _scope_limited_answer,
+    _source_breakdown,
+    _source_scope,
+    _uploaded_evidence_strength,
+)
+from backend.services.embeddings import healthcheck_embeddings
 from backend.services.nli import entailment_prob
 from backend.services.judge import aggregate_judge_report, evaluate_faithfulness
 from backend.confidence import build_confidence, score_percent
 from backend.eval_metrics import aggregate_metrics
 from backend.sense_resolver import resolve_sense, filter_citations_by_sense
-import hashlib
 import statistics
 
 # Initialize FastAPI app
 app = FastAPI(title="ScholarRAG API", version="1.0")
 
-# Allow frontend access
-# CORS: allow local dev frontend
-# CORS: allow local dev frontend explicitly
+_cors_env = os.environ.get("CORS_ORIGINS", "")
+_cors_origins = (
+    [o.strip() for o in _cors_env.split(",") if o.strip()]
+    if _cors_env
+    else ["http://localhost:5173", "http://127.0.0.1:5173"]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -64,6 +106,12 @@ app.include_router(chat.router)
 
 RESEARCH_CHAT_MODEL = os.getenv("RESEARCH_CHAT_MODEL", "gpt-4o-mini")
 ENABLE_WEB_FALLBACK = os.getenv("ENABLE_WEB_FALLBACK", "false").strip().lower() == "true"
+
+# Fallback thresholds: only replace the LLM answer with a template when citation
+# grounding is critically low.  Single-paragraph answers and answers with any inline
+# citation are always preserved.
+_FALLBACK_MIN_PARAGRAPHS = 3          # only enforce coverage on multi-paragraph answers
+_FALLBACK_MIN_COVERAGE = 0.20         # < 20% of paragraphs cited → critically uncited
 
 
 def _ensure_eval_schema() -> None:
@@ -133,155 +181,6 @@ _ensure_eval_schema()
 _ensure_msa_schema()
 
 
-def _load_latest_calibration_weights() -> dict:
-    row = fetchone(
-        """
-        SELECT weights
-        FROM confidence_calibration
-        ORDER BY created_at DESC
-        LIMIT 1
-        """
-    )
-    if not row:
-        return {"w1": 0.58, "w2": 0.22, "w3": 0.20, "b": 0.0}
-    weights = row.get("weights") or {}
-    if not isinstance(weights, dict):
-        return {"w1": 0.58, "w2": 0.22, "w3": 0.20, "b": 0.0}
-    return {
-        "w1": float(weights.get("w1", 0.58)),
-        "w2": float(weights.get("w2", 0.22)),
-        "w3": float(weights.get("w3", 0.20)),
-        "b": float(weights.get("b", 0.0)),
-    }
-
-
-def _clamp01(x: float) -> float:
-    return max(0.0, min(1.0, x))
-
-
-def _normalize_inverse(value: float, min_v: float, max_v: float) -> float:
-    # Lower value is better (e.g., vector distance).
-    span = max(1e-6, max_v - min_v)
-    return _clamp01((max_v - value) / span)
-
-
-def _normalize_forward(value: float, min_v: float, max_v: float) -> float:
-    # Higher value is better (e.g., cosine similarity).
-    span = max(1e-6, max_v - min_v)
-    return _clamp01((value - min_v) / span)
-
-
-def _base_confidence(match_strength: float, rank: int, total: int, agreement: float) -> float:
-    rank_stability = 1.0 if total <= 1 else 1.0 - ((rank - 1) / (total - 1))
-    raw = _clamp01(0.65 * match_strength + 0.2 * rank_stability + 0.15 * agreement)
-    # Calibrate to avoid extreme/overconfident values.
-    calibrated = 0.28 + 0.58 * raw  # roughly [0.28, 0.86]
-    return round(_clamp01(calibrated), 3)
-
-
-def _confidence_breakdown(match_strength: float, rank: int, total: int, agreement: float) -> dict:
-    rank_stability = 1.0 if total <= 1 else 1.0 - ((rank - 1) / (total - 1))
-    raw = _clamp01(0.65 * match_strength + 0.2 * rank_stability + 0.15 * agreement)
-    # Calibrate to avoid extreme/overconfident values.
-    calibrated = 0.28 + 0.58 * raw  # roughly [0.28, 0.86]
-    return {
-        "match_strength": round(match_strength, 3),
-        "rank_stability": round(rank_stability, 3),
-        "agreement": round(agreement, 3),
-        "raw": round(raw, 3),
-        "calibrated": round(_clamp01(calibrated), 3),
-    }
-
-
-def _normalize_inline_citations(answer: str) -> str:
-    """
-    Normalize inline citation formatting without forcing citations into every sentence.
-    """
-    text = (answer or "").strip()
-    if not text:
-        return text
-    # Normalize [S12] -> [S12] (already canonical) and collapse spacing/punctuation around citations.
-    text = re.sub(r"\[(?:S)?(\d+)\]", r"[S\1]", text)
-    text = re.sub(r"\s+([.,;:!?])", r"\1", text)
-    text = re.sub(r"([.,;:!?])\s*\[S(\d+)\]\s*([.,;:!?])", r"\1 [S\2]", text)
-    text = re.sub(r"\[S(\d+)\]\s*([.,;:!?])", r"\2 [S\1]", text)
-    return text
-
-
-def _humanize_answer_text(answer: str) -> str:
-    text = (answer or "").strip()
-    if not text:
-        return text
-    replacements = [
-        (r"\bInsufficient evidence is available\b", "I only found limited evidence in your uploaded sources"),
-        (r"\bInsufficient evidence exists\b", "I only found limited evidence in your uploaded sources"),
-        (r"\bInsufficient evidence\b", "I only found limited evidence in your uploaded sources"),
-        (r"\bBased on the provided context\b", "From what I found in your documents"),
-        (r"\bBased on your uploaded documents\b", "From your uploaded documents"),
-    ]
-    for pattern, repl in replacements:
-        text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
-    return text
-
-
-def _citation_coverage_stats(answer: str) -> tuple[float, int, int]:
-    parts = [p.strip() for p in re.split(r"\n{2,}", (answer or "").strip()) if p.strip()]
-    if not parts:
-        return 0.0, 0, 0
-    cited = 0
-    for p in parts:
-        if re.search(r"\[S\d+\]", p):
-            cited += 1
-    coverage = cited / max(1, len(parts))
-    unsupported = max(0, len(parts) - cited)
-    return coverage, unsupported, len(parts)
-
-
-def _apply_usage_boost(citations: list[dict], answer: str) -> list[dict]:
-    """
-    Adjust confidence by how often each source is actually cited in the answer text.
-    """
-    if not citations:
-        return citations
-    tags = re.findall(r"\[S(\d+)\]", answer or "")
-    if not tags:
-        return citations
-    counts = {}
-    for t in tags:
-        sid = int(t)
-        counts[sid] = counts.get(sid, 0) + 1
-    max_count = max(counts.values()) if counts else 1
-    for c in citations:
-        sid = int(c.get("id", 0) or 0)
-        used = counts.get(sid, 0)
-        usage = used / max_count if max_count > 0 else 0.0
-        base = float(c.get("confidence", 0.5))
-        # Bias toward retrieval confidence, then reward true usage in the answer.
-        boosted = _clamp01(0.8 * base + 0.2 * usage)
-        c["base_confidence"] = round(base, 3)
-        c["usage_boost"] = round(usage, 3)
-        c["confidence"] = round(min(0.92, max(0.2, boosted)), 3)
-        c["used_in_answer"] = bool(used)
-    return citations
-
-
-def _is_doc_visibility_query(qnorm: str) -> bool:
-    doc_terms = ("doc", "docs", "document", "documents", "uploaded", "attach", "attached", "file", "files")
-    visibility_terms = ("see", "access", "read", "view", "visible")
-    has_doc = any(t in qnorm for t in doc_terms)
-    has_visibility = any(t in qnorm for t in visibility_terms)
-    is_question = qnorm.startswith(("can ", "do ", "are ", "is ", "did ", "have "))
-    return has_doc and has_visibility and is_question
-
-
-def _is_doc_intent_query(qnorm: str) -> bool:
-    doc_terms = (
-        "doc", "docs", "document", "documents", "uploaded", "attach", "attached", "file", "files",
-        "pdf", "page", "chunk", "source", "citation", "cite", "resume", "assignment", "lecture",
-    )
-    return any(t in qnorm for t in doc_terms)
-
-
 def _chat_answer(query: str) -> str:
     if client is None:
         return "I can help with questions, but the language model is not configured right now."
@@ -300,976 +199,6 @@ def _chat_answer(query: str) -> str:
         temperature=0.4,
     )
     return (completion.choices[0].message.content or "").strip()
-
-
-def _scope_evidence_label(scope: str) -> str:
-    return "uploaded documents" if scope == "uploaded" else "public sources"
-
-
-def _normalize_source_url(value: str | None) -> str | None:
-    v = (value or "").strip()
-    if not v:
-        return None
-    if v.startswith("http://") or v.startswith("https://"):
-        return v
-    if v.startswith("10."):
-        return f"https://doi.org/{v}"
-    if v.lower().startswith("doi.org/"):
-        return f"https://{v}"
-    return None
-
-
-def _build_public_evidence_fallback(query: str, citations: list[dict]) -> str:
-    """
-    Deterministic fallback for public mode when strict claim-coverage check blocks LLM output.
-    Keeps output grounded to retrieved public sources and explicit citations.
-    """
-    if not citations:
-        return "I couldn’t find enough reliable public source evidence for this query."
-    lines = []
-    for i, c in enumerate(citations[:3], start=1):
-        title = c.get("title") or f"Source {i}"
-        year = c.get("year")
-        snippet = (c.get("snippet") or "").strip()
-        snippet = re.sub(r"\s+", " ", snippet)[:220]
-        header = f"{title} ({year})" if year else title
-        if snippet:
-            lines.append(f"- {header}: {snippet} [S{i}]")
-        else:
-            lines.append(f"- {header} [S{i}]")
-    return (
-        "I found relevant public research sources for your query. "
-        "Here are the strongest matches from the retrieved evidence:\n"
-        + "\n".join(lines)
-    )
-
-
-def _build_uploaded_related_work_fallback(citations: list[dict]) -> str:
-    if not citations:
-        return "I couldn’t find related-work evidence in your uploaded paper."
-    lines = []
-    for i, c in enumerate(citations[:5], start=1):
-        title = c.get("title") or f"Document {c.get('doc_id', '?')}"
-        page = c.get("page")
-        snippet = re.sub(r"\s+", " ", (c.get("snippet") or "").strip())[:220]
-        header = f"{title} (p.{page})" if page is not None else title
-        if snippet:
-            lines.append(f"- {header}: {snippet} [S{i}]")
-        else:
-            lines.append(f"- {header} [S{i}]")
-    return (
-        "I found related/prior-work evidence in your uploaded paper. "
-        "Here are the most relevant excerpts:\n"
-        + "\n".join(lines)
-    )
-
-
-def _build_uploaded_evidence_fallback(query: str, citations: list[dict]) -> str:
-    """
-    Deterministic fallback for uploaded docs when the LLM answer fails citation coverage.
-    Keeps the response grounded in retrieved snippets instead of collapsing to abstention.
-    """
-    if not citations:
-        return "I couldn’t find enough evidence in your uploaded documents for that query."
-
-    unique_docs = {
-        (c.get("title") or f"Document {c.get('doc_id', '?')}")
-        for c in citations
-        if c.get("title") or c.get("doc_id") is not None
-    }
-    multi_doc = len(unique_docs) > 1
-    lead = "Here is a grounded summary from the selected uploaded evidence"
-    if _is_uploaded_doc_summary_query(query):
-        lead = "Here is a grounded summary from the uploaded documents" if multi_doc else "Here is a grounded summary from the uploaded document"
-    grouped: dict[str, list[tuple[int, str]]] = {}
-    for i, c in enumerate(citations[:6], start=1):
-        title = c.get("title") or f"Document {c.get('doc_id', '?')}"
-        page = c.get("page")
-        snippet = re.sub(r"\s+", " ", (c.get("snippet") or "").strip())
-        snippet = re.split(r"(?:\s*[|•]\s*|\s{2,})", snippet)[0]
-        snippet = re.split(r"(?<=[.!?;])\s+", snippet)[0]
-        snippet = snippet[:180].strip(" -:")
-        header = f"{title} (p.{page})" if page is not None else title
-        grouped.setdefault(header, [])
-        if snippet:
-            grouped[header].append((i, snippet))
-
-    sections = []
-    for header, items in grouped.items():
-        joined = " ".join(f"{snippet} [S{idx}]" for idx, snippet in items[:2]).strip()
-        if joined:
-            prefix = f"{header}: " if multi_doc else "- "
-            sections.append(f"{prefix}{joined}" if multi_doc else f"- {header}: {joined}")
-        else:
-            sections.append(header if multi_doc else f"- {header}")
-
-    return f"{lead}:\n" + "\n".join(sections)
-
-
-def _rebalance_uploaded_multi_doc_citations(citations: list[dict], doc_ids: list[int] | None, k: int) -> list[dict]:
-    if not citations or not doc_ids or len(doc_ids) <= 1:
-        return citations
-
-    by_doc: dict[int, list[dict]] = {}
-    ordered_doc_ids: list[int] = []
-    for c in citations:
-        did = c.get("doc_id")
-        if did is None:
-            continue
-        did = int(did)
-        by_doc.setdefault(did, []).append(c)
-        if did not in ordered_doc_ids:
-            ordered_doc_ids.append(did)
-
-    if len(by_doc) <= 1:
-        return citations
-
-    for did in by_doc:
-        by_doc[did] = sorted(
-            by_doc[did],
-            key=lambda item: (
-                -float(item.get("rerank_norm", item.get("rerank_raw", item.get("sim_score", 0.0))) or 0.0),
-                -float(item.get("sim_score", 0.0) or 0.0),
-            ),
-        )
-
-    balanced: list[dict] = []
-    seen: set[tuple[int | None, int | None]] = set()
-    max_rounds = max(len(rows) for rows in by_doc.values())
-    for idx in range(max_rounds):
-        for did in doc_ids:
-            rows = by_doc.get(int(did), [])
-            if idx >= len(rows):
-                continue
-            row = rows[idx]
-            key = (row.get("doc_id"), row.get("chunk_id"))
-            if key in seen:
-                continue
-            seen.add(key)
-            balanced.append(row)
-            if len(balanced) >= int(k):
-                return balanced
-
-    return balanced or citations
-
-
-def _build_multi_doc_uploaded_summary(citations: list[dict], doc_ids: list[int] | None) -> str:
-    if not citations or not doc_ids or len(doc_ids) <= 1:
-        return _build_uploaded_evidence_fallback("summary", citations)
-
-    grouped: dict[int, list[dict]] = {}
-    for c in citations:
-        did = c.get("doc_id")
-        if did is None:
-            continue
-        grouped.setdefault(int(did), []).append(c)
-
-    sections: list[str] = []
-    for did in doc_ids:
-        rows = grouped.get(int(did), [])
-        if not rows:
-            continue
-        title = rows[0].get("title") or f"Document {did}"
-        bullets: list[str] = []
-        for row in rows[:2]:
-            sid = row.get("id")
-            page = row.get("page")
-            snippet = re.sub(r"\s+", " ", (row.get("snippet") or "").strip())
-            snippet = re.split(r"(?:\s*[|•]\s*|\s{2,})", snippet)[0]
-            snippet = re.split(r"(?<=[.!?;])\s+", snippet)[0]
-            snippet = snippet[:170].strip(" -:")
-            if not snippet:
-                continue
-            cite = f" [S{sid}]" if sid else ""
-            page_prefix = f"(p.{page}) " if page is not None else ""
-            bullets.append(f"- {page_prefix}{snippet}{cite}")
-        if bullets:
-            sections.append(f"{title}\n" + "\n".join(bullets))
-
-    if not sections:
-        return _build_uploaded_evidence_fallback("summary", citations)
-
-    combined_takeaways: list[str] = []
-    for did in doc_ids:
-        rows = grouped.get(int(did), [])
-        if not rows:
-            continue
-        title = rows[0].get("title") or f"Document {did}"
-        first = rows[0]
-        sid = first.get("id")
-        cite = f" [S{sid}]" if sid else ""
-        snippet = re.sub(r"\s+", " ", (first.get("snippet") or "").strip())
-        snippet = re.split(r"(?:\s*[|•]\s*|\s{2,})", snippet)[0]
-        snippet = re.split(r"(?<=[.!?;])\s+", snippet)[0]
-        snippet = snippet[:120].strip(" -:")
-        if snippet:
-            combined_takeaways.append(f"- {title}: {snippet}{cite}")
-
-    parts = ["Here is a grounded cross-document summary:"]
-    parts.extend(sections)
-    if combined_takeaways:
-        parts.append("Combined takeaways")
-        parts.extend(combined_takeaways)
-    return "\n\n".join(parts)
-
-
-def _is_explicit_uploaded_summary_request(query: str) -> bool:
-    q = (query or "").strip().lower()
-    if not q:
-        return False
-    markers = [
-        "summarize the selected uploaded document",
-        "summarize the selected uploaded documents",
-        "organize the response by document",
-        "combined takeaways",
-        "extract the key skills",
-        "extract the key skills, topics, or main points from each selected uploaded document",
-        "what evidence best supports the main claims in each selected uploaded document",
-    ]
-    return any(marker in q for marker in markers)
-
-
-def _source_breakdown(citations: list[dict]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for c in citations or []:
-        src = (c.get("source") or "unknown").lower()
-        counts[src] = counts.get(src, 0) + 1
-    return counts
-
-
-def _uploaded_evidence_strength(citations: list[dict]) -> float:
-    """
-    Estimate how strong uploaded-only evidence is for a query.
-    """
-    uploaded = [c for c in citations if (c.get("source") or "").lower() == "uploaded"]
-    if not uploaded:
-        return 0.0
-    avg_conf = sum(float(c.get("confidence", 0.0) or 0.0) for c in uploaded) / max(1, len(uploaded))
-    unique_docs = len({c.get("doc_id") for c in uploaded if c.get("doc_id") is not None})
-    doc_coverage = _clamp01(unique_docs / 2.0)
-    hit_factor = _clamp01(len(uploaded) / 6.0)
-    return round(_clamp01(0.55 * avg_conf + 0.25 * hit_factor + 0.2 * doc_coverage), 3)
-
-
-def _normalize_tokens(text: str) -> set[str]:
-    stop = {
-        "the", "and", "for", "with", "from", "that", "this", "what", "about", "tell", "into",
-        "your", "have", "does", "is", "are", "was", "were", "can", "could", "would", "should",
-        "any", "all", "how", "why", "when", "where", "who", "whom", "which", "whose",
-    }
-    toks = re.findall(r"[a-z0-9]+", (text or "").lower())
-    return {t for t in toks if len(t) > 2 and t not in stop}
-
-
-def _query_anchor_terms(query: str) -> set[str]:
-    """
-    Extract anchor terms (entity/topic tokens) from query to avoid generic matches.
-    Example: 'skyworks the company' -> {'skyworks'}.
-    """
-    generic = {
-        "company", "general", "overview", "background", "about", "tell",
-        "what", "who", "where", "when", "which", "please", "info", "information",
-    }
-    toks = _normalize_tokens(query)
-    anchors = {t for t in toks if t not in generic}
-    if anchors:
-        return anchors
-    return toks
-
-
-def _primary_anchor_term(query: str) -> str | None:
-    """
-    Pick the main entity/topic anchor from left to right to avoid matching on
-    context modifiers like location words (e.g., 'in irvine').
-    """
-    generic = {
-        "company", "general", "overview", "background", "about", "tell",
-        "what", "who", "where", "when", "which", "please", "info", "information",
-        "in", "on", "for", "with", "the", "a", "an",
-        "need", "needs", "know", "kinda", "kind", "type", "is", "this", "that",
-        "want", "wanna", "would", "like", "need", "about", "me", "you", "i",
-    }
-    qlow = (query or "").lower()
-    ordered = re.findall(r"[a-z0-9]+", qlow)
-    # Prefer token immediately after query intent cues.
-    m = re.search(r"(?:about|on|for)\s+([a-z0-9]+)", qlow)
-    if m:
-        cand = m.group(1)
-        if len(cand) > 2 and cand not in generic:
-            return cand
-    for t in ordered:
-        if len(t) <= 2 or t in generic:
-            continue
-        return t
-    return None
-
-
-def _has_anchor_match(query: str, citation: dict) -> bool:
-    anchors = _query_anchor_terms(query)
-    if not anchors:
-        return True
-    hay = f"{citation.get('title','')} {citation.get('snippet','')}".lower()
-    primary = _primary_anchor_term(query)
-    if primary and primary not in hay:
-        return False
-    # Keep secondary anchors permissive after primary is satisfied.
-    return True
-
-
-def _query_has_disambiguator(query: str) -> bool:
-    q = (query or "").lower()
-    hints = (
-        "nlp", "llm", "language model", "bert", "gpt", "attention", "machine learning",
-        "computer vision", "vision", "image",
-        "electrical", "power", "grid", "voltage", "substation",
-    )
-    return any(h in q for h in hints)
-
-
-def _infer_domain(citation: dict) -> str:
-    hay = f"{citation.get('title','')} {citation.get('snippet','')}".lower()
-    domain_rules = {
-        "nlp_ai": ("nlp", "language model", "llm", "gpt", "bert", "token", "text"),
-        "vision_ai": ("computer vision", "image", "segmentation", "detection"),
-        "power_electrical": ("electrical", "power system", "transformer condition", "voltage", "thermal", "substation"),
-    }
-    best_domain = "other"
-    best_hits = 0
-    for d, keys in domain_rules.items():
-        hits = sum(1 for k in keys if k in hay)
-        if hits > best_hits:
-            best_hits = hits
-            best_domain = d
-    return best_domain
-
-
-def _ambiguous_domain_mix(query: str, citations: list[dict]) -> tuple[bool, list[str]]:
-    if not citations:
-        return False, []
-    if _query_has_disambiguator(query):
-        return False, []
-    counts = {}
-    for c in citations[:6]:
-        d = _infer_domain(c)
-        counts[d] = counts.get(d, 0) + 1
-    counts.pop("other", None)
-    if len(counts) <= 1:
-        return False, []
-    total = sum(counts.values())
-    if total <= 0:
-        return False, []
-    dominant = max(counts.values()) / total
-    # If no single meaning dominates, ask for clarification.
-    if dominant < 0.72:
-        labels = []
-        if "nlp_ai" in counts:
-            labels.append("NLP/LLM transformers")
-        if "vision_ai" in counts:
-            labels.append("computer vision transformers")
-        if "power_electrical" in counts:
-            labels.append("electrical power transformers")
-        return True, labels
-    return False, []
-
-
-def _query_overlap_strength(query: str, citations: list[dict]) -> float:
-    """
-    Lexical sanity check: if query terms don't appear in retrieved snippets,
-    uploaded evidence is probably off-topic even if vector ranks exist.
-    """
-    q = _normalize_tokens(query)
-    if not q or not citations:
-        return 0.0
-    best = 0.0
-    for c in citations[:6]:
-        s = _normalize_tokens(c.get("snippet", ""))
-        if not s:
-            continue
-        overlap = len(q & s) / max(1, len(q))
-        best = max(best, overlap)
-    return round(best, 3)
-
-
-def _prune_public_citations(query: str, citations: list[dict]) -> list[dict]:
-    """
-    Filter obviously irrelevant public citations for the current query.
-    """
-    if not citations:
-        return citations
-    q_tokens = _normalize_tokens(query)
-    kept = []
-    for c in citations:
-        if not _has_anchor_match(query, c):
-            continue
-        ov = _chunk_query_overlap(query, c)
-        hay = f"{c.get('title','')} {c.get('snippet','')}".lower()
-        has_exact_query_token = any(t in hay for t in q_tokens) if q_tokens else False
-        # Keep only query-relevant public evidence to avoid unrelated "high confidence" bleed-through.
-        if ov >= 0.12 or has_exact_query_token:
-            kept.append(c)
-    return kept
-
-
-def _chunk_query_overlap(query: str, citation: dict) -> float:
-    q = _normalize_tokens(query)
-    if not q:
-        return 0.0
-    hay = f"{citation.get('title','')} {citation.get('snippet','')}"
-    s = _normalize_tokens(hay)
-    if not s:
-        return 0.0
-    return len(q & s) / max(1, len(q))
-
-
-def _prune_uploaded_citations(query: str, citations: list[dict]) -> list[dict]:
-    """
-    Remove weak off-topic uploaded chunks so answers are grounded in the right doc.
-    """
-    if len(citations) <= 2:
-        return citations
-
-    scored = []
-    for c in citations:
-        ov = _chunk_query_overlap(query, c)
-        scored.append((ov, c))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    best_overlap = scored[0][0]
-    best_doc = scored[0][1].get("doc_id")
-
-    keep = []
-    threshold = max(0.12, best_overlap - 0.16)
-    for ov, c in scored:
-        same_doc_as_best = c.get("doc_id") == best_doc
-        conf = float(c.get("confidence", 0.0) or 0.0)
-        if ov >= threshold or (same_doc_as_best and conf >= 0.45):
-            keep.append(c)
-
-    if not keep:
-        keep = [c for _, c in scored[:2]]
-    return keep
-
-
-def _source_scope(citation: dict) -> str:
-    """
-    Coarse source scope classification to prevent overgeneralization.
-    """
-    hay = f"{citation.get('title','')} {citation.get('snippet','')}".lower()
-    if any(k in hay for k in ("resume", "curriculum vitae", "experience", "co-op", "intern")):
-        return "personal_profile"
-    if any(k in hay for k in ("assignment", "lecture", "coursework", "homework")):
-        return "course_material"
-    if citation.get("source") == "uploaded":
-        return "uploaded_document"
-    return "public_reference"
-
-
-def _is_definition_style_query(query: str) -> bool:
-    q = (query or "").strip().lower()
-    if not q:
-        return False
-    # Doc-grounded requests like "tell me about this uploaded paper" are not
-    # generic definition/company queries.
-    if _is_doc_intent_query(q):
-        return False
-    starters = ("what is", "who is", "tell me about", "explain", "define")
-    return q.startswith(starters) or " company" in q
-
-
-def _is_profile_context_query(query: str) -> bool:
-    q = (query or "").lower()
-    profile_cues = (
-        "resume",
-        "cv",
-        "profile",
-        "experience",
-        "worked",
-        "intern",
-        "project",
-        "role",
-        "gaurav",
-        "my docs",
-    )
-    return any(c in q for c in profile_cues)
-
-
-def _is_general_knowledge_query(query: str) -> bool:
-    q = (query or "").strip().lower()
-    if not q:
-        return False
-    cues = (
-        "in general",
-        "generally",
-        "what is",
-        "who is",
-        "tell me about",
-        "company",
-        "overview",
-        "background",
-    )
-    return any(c in q for c in cues)
-
-
-def _is_related_work_query(query: str) -> bool:
-    q = (query or "").lower()
-    cues = (
-        "related work",
-        "similar work",
-        "similar papers",
-        "relevant work",
-        "prior work",
-        "literature review",
-        "baseline papers",
-        "closest papers",
-        "papers similar",
-    )
-    return any(c in q for c in cues)
-
-
-def _is_company_intent_query(query: str) -> bool:
-    q = (query or "").lower()
-    if _is_doc_intent_query(q):
-        return False
-    company_cues = (
-        " inc", " llc", " ltd", " corp", " company", " co.", " corporation",
-        " technologies", " systems", " holdings", " group", " enterprises",
-    )
-    business_intent_cues = (
-        "company overview", "about the company", "what company", "what does",
-        "headquartered", "ticker", "founded", "market cap", "industry",
-    )
-    return any(c in q for c in company_cues) or any(c in q for c in business_intent_cues)
-
-
-def _requested_public_source(query: str) -> str | None:
-    q = (query or "").lower()
-    mapping = (
-        ("ieee", "ieee"),
-        ("springer", "springer"),
-        ("spirnger", "springer"),
-        ("srpinger", "springer"),
-        ("elsevier", "elsevier"),
-        ("semantic scholar", "semanticscholar"),
-        ("semanticscholar", "semanticscholar"),
-        ("semantic", "semanticscholar"),
-        ("openalex", "openalex"),
-        ("arxiv", "arxiv"),
-        ("crossref", "crossref"),
-    )
-    for token, source in mapping:
-        if token in q:
-            return source
-
-    # Fuzzy fallback for misspelled provider names.
-    normalized_tokens = re.findall(r"[a-z]+", q)
-    provider_names = ["ieee", "springer", "elsevier", "semanticscholar", "openalex", "arxiv", "crossref"]
-    for t in normalized_tokens:
-        match = difflib.get_close_matches(t, provider_names, n=1, cutoff=0.78)
-        if match:
-            return match[0]
-    return None
-
-
-def _is_entity_level_query(query: str) -> bool:
-    q = (query or "").strip().lower()
-    if not q:
-        return False
-    if _is_doc_intent_query(q):
-        return False
-    patterns = (
-        r"^tell me about\s+[a-z0-9 .,&-]+$",
-        r"^what is\s+[a-z0-9 .,&-]+\??$",
-        r"^[a-z0-9 .,&-]+\s+company$",
-        r"^[a-z0-9 .,&-]+\s+irvine$",
-    )
-    has_pattern = any(re.match(p, q) for p in patterns)
-    tokens = re.findall(r"[a-z0-9]+", q)
-    # Keep this conservative to avoid false positives on normal doc questions.
-    short_entity_like = 1 <= len(tokens) <= 3
-    role_terms = {"worked", "experience", "did", "role", "intern", "resume", "cv", "my"}
-    research_terms = {"paper", "research", "study", "method", "results", "abstract", "dataset", "uploaded", "attached", "document", "docs"}
-    has_role_intent = any(t in tokens for t in role_terms)
-    has_research_intent = any(t in tokens for t in research_terms)
-    return (has_pattern or short_entity_like or _is_company_intent_query(q)) and not has_role_intent and not has_research_intent
-
-
-def _is_uploaded_doc_summary_query(query: str) -> bool:
-    q = (query or "").strip().lower()
-    if not q:
-        return False
-    cues = (
-        "attached research paper",
-        "attached paper",
-        "uploaded paper",
-        "uploaded research paper",
-        "this paper",
-        "that paper",
-        "my paper",
-        "summarize the paper",
-        "summary of the paper",
-        "tell me about the attached",
-        "tell me about this document",
-        "tell me about the uploaded doc",
-        "tell me about the uploaded document",
-        "tell me about my document",
-        "tell me about my doc",
-        "summarize this resume",
-        "what skills are listed in this resume",
-        "summarize this document",
-    )
-    return any(c in q for c in cues)
-
-
-def _resolve_effective_doc_id(doc_id: int | None, scope: str, query: str) -> int | None:
-    """
-    In uploaded scope, bind doc-intent queries to a specific ready document
-    if the caller did not select one explicitly.
-    """
-    if scope != "uploaded" or doc_id is not None:
-        return doc_id
-
-    rows = fetchall(
-        """
-        SELECT id, title
-        FROM documents
-        WHERE status='ready'
-        ORDER BY created_at DESC
-        LIMIT 20
-        """
-    )
-    if not rows:
-        return None
-    if len(rows) == 1:
-        return rows[0].get("id")
-
-    q = (query or "").lower()
-    # If user references a specific file name in the prompt, bind to it.
-    for r in rows:
-        title = (r.get("title") or "").lower()
-        if title and (title in q or Path(title).stem in q):
-            return r.get("id")
-
-    # For explicit doc-summary intent, default to the most recently uploaded doc.
-    if _is_doc_intent_query(q) or _is_uploaded_doc_summary_query(q):
-        return rows[0].get("id")
-    return None
-
-
-def _needs_scope_limited_answer(query: str, citations: list[dict]) -> bool:
-    if not citations:
-        return False
-    if not (_is_definition_style_query(query) or _is_company_intent_query(query)):
-        return False
-    if _is_profile_context_query(query):
-        return False
-    has_public = any((c.get("scope") == "public_reference") for c in citations)
-    if has_public:
-        return False
-    has_profile_or_course = any(
-        (c.get("scope") in {"personal_profile", "course_material"}) for c in citations
-    )
-    return has_profile_or_course
-
-
-def _has_official_company_docs() -> bool:
-    row = fetchone(
-        """
-        SELECT COUNT(*) AS c
-        FROM documents
-        WHERE status='ready' AND doc_type IN ('official_doc', 'research_paper')
-        """
-    )
-    return bool(row and int(row.get("c", 0) or 0) > 0)
-
-
-def _scope_limited_answer(query: str, citations: list[dict]) -> str:
-    first = citations[0] if citations else {}
-    title = first.get("title") or "your uploaded source"
-    sid = first.get("id", 1)
-    q = (query or "").lower()
-    q = re.sub(r"^(what is|who is|tell me about|explain|define|what company is)\s+", "", q, flags=re.IGNORECASE)
-    q = re.sub(r"\b(please|pls|kindly|about|the|a|an)\b", " ", q)
-    q = re.sub(r"\s+", " ", q).strip(" ?.")
-    topic = q.title() if q else "this topic"
-    return (
-        f"I only found `{topic}` mentioned in profile/course context in your uploaded files "
-        f"(for example, `{title}`), not as a general reference source. "
-        f"I don’t have enough reliable evidence here to give a broad definition. [S{sid}]"
-    )
-
-
-def _rank_and_trim_citations(query: str, citations: list[dict], k: int, prefer_public: bool = False) -> list[dict]:
-    """
-    Generic relevance ranking across mixed sources.
-    """
-    if not citations:
-        return citations
-    ranked = []
-    # Source-quality prior: prioritize scholarly provider APIs over generic metadata noise.
-    source_prior = {
-        "semanticscholar": 0.18,
-        "openalex": 0.16,
-        "ieee": 0.16,
-        "springer": 0.15,
-        "elsevier": 0.15,
-        "arxiv": 0.14,
-        "web": 0.08,
-        "crossref": -0.08,
-        "unknown_public": 0.0,
-        "uploaded": 0.0,
-    }
-    for idx, c in enumerate(citations, start=1):
-        ov = _chunk_query_overlap(query, c)
-        conf = float(c.get("confidence", 0.0) or 0.0)
-        # lexical relevance is primary; confidence secondary
-        rel = (0.65 * ov) + (0.35 * conf)
-        src = (c.get("source") or "").lower()
-        rel += source_prior.get(src, 0.0)
-        if prefer_public:
-            if (c.get("source") or "").lower() != "uploaded":
-                rel += 0.18
-            else:
-                rel -= 0.08
-        cc = dict(c)
-        cc["initial_rank"] = idx
-        cc["rerank_raw"] = round(ov, 4)
-        cc["rerank_norm"] = round(ov, 4)
-        cc["reranker_type"] = "lexical_overlap"
-        cc["_rel"] = rel
-        ranked.append(cc)
-    ranked.sort(key=lambda x: x.get("_rel", 0.0), reverse=True)
-    top = ranked[0].get("_rel", 0.0)
-    q = (query or "").lower()
-    list_intent = any(t in q for t in ("papers", "paper", "studies", "references", "sources", "literature", "survey"))
-    threshold = max(0.02, top - 0.45) if list_intent else max(0.10, top - 0.25)
-    min_keep = min(max(1, k), 8 if list_intent else 3)
-    kept = [c for c in ranked if c.get("_rel", 0.0) >= threshold][: max(1, k)]
-    if len(kept) < min_keep:
-        kept = ranked[:min_keep]
-    if not kept:
-        kept = ranked[: max(1, k)]
-
-    if prefer_public:
-        has_public = any((c.get("source") or "").lower() != "uploaded" for c in kept)
-        if not has_public:
-            public_candidates = [c for c in ranked if (c.get("source") or "").lower() != "uploaded"]
-            if public_candidates:
-                kept = [public_candidates[0]] + kept[:-1]
-
-    for c in kept:
-        c.pop("_rel", None)
-    return kept
-
-
-def _build_evidence_id(citation: dict) -> str:
-    if (citation.get("source") or "") == "uploaded":
-        doc_id = citation.get("doc_id")
-        chunk_id = citation.get("chunk_id")
-        page = citation.get("page")
-        return f"uploaded:{doc_id}:{chunk_id}:{page}"
-
-    source = (citation.get("source") or "public").lower()
-    doi = (citation.get("url") or "").replace("https://doi.org/", "").replace("http://doi.org/", "")
-    title = (citation.get("title") or "").lower()
-    year = citation.get("year")
-    base = doi or title or source
-    return f"{source}:{base}:{year or ''}"
-
-
-def _split_answer_sentences(answer: str) -> list[str]:
-    if not answer:
-        return []
-    parts = re.split(r"(?<=[.!?])\s+", answer.strip())
-    return [p.strip() for p in parts if p.strip()]
-
-
-def _extract_sentence_citation_ids(sentence: str) -> list[int]:
-    ids = []
-    for m in re.finditer(r"\[S(\d+)\]", sentence):
-        try:
-            ids.append(int(m.group(1)))
-        except Exception:
-            continue
-    return ids
-
-
-def _stability_lookup_uploaded(q: str, k: int, doc_id: int | None, perturb: bool = False) -> set[str]:
-    query = q if q else ""
-    if perturb:
-        query = (query + " methods overview").strip()
-    results = search_uploaded_chunks(query, k=k, doc_id=doc_id).get("results", []) if query else []
-    out = set()
-    for r in results:
-        c = {
-            "source": "uploaded",
-            "doc_id": r.get("document_id"),
-            "chunk_id": r.get("id"),
-            "page": r.get("page_no"),
-        }
-        out.add(_build_evidence_id(c))
-    return out
-
-
-def _stability_lookup_public(q: str, k: int, source_only: str | None = None, perturb: bool = False) -> set[str]:
-    query = q if q else ""
-    if perturb:
-        query = (query + " methods").strip() if query else ""
-        query = query.strip()
-    papers = public_live_search(query, k=k, source_only=source_only) if query else []
-    out = set()
-    for p in papers:
-        citation = {
-            "source": p.get("source") or p.get("venue") or "public",
-            "title": p.get("title"),
-            "year": p.get("year"),
-            "url": _normalize_source_url(p.get("url") or p.get("doi")),
-        }
-        out.add(_build_evidence_id(citation))
-    return out
-
-
-def _compute_stability_scores(query: str, k: int, scope: str, doc_id: int | None = None, source_only: str | None = None) -> dict[str, float]:
-    if not query:
-        return {}
-
-    run_sets: list[set[str]] = []
-    if scope == "uploaded":
-        run_sets.append(_stability_lookup_uploaded(query, k, doc_id, perturb=False))
-        run_sets.append(_stability_lookup_uploaded((query + " " + "related"), k, doc_id, perturb=True))
-        run_sets.append(_stability_lookup_uploaded((query + " " + "overview"), k, doc_id, perturb=True))
-        if doc_id is not None:
-            run_sets.append(_stability_lookup_uploaded(query, k, None, perturb=False))
-    else:
-        run_sets.append(_stability_lookup_public(query, k, source_only=source_only, perturb=False))
-        run_sets.append(_stability_lookup_public((query + " related"), k, source_only=source_only, perturb=True))
-        run_sets.append(_stability_lookup_public((query + " 2024"), k, source_only=source_only, perturb=True))
-        run_sets.append(_stability_lookup_public((query + " survey"), k, source_only=source_only, perturb=True))
-
-    runs = max(1, len(run_sets))
-    seen: dict[str, int] = {}
-    for ids in run_sets:
-        for evidence_id in ids:
-            seen[evidence_id] = seen.get(evidence_id, 0) + 1
-
-    return {eid: count / float(runs) for eid, count in seen.items()}
-
-
-def _compute_agreement_score(sentence: str, context_map: dict[int, dict], evidence_id: str) -> float:
-    # compare across top evidence snippets from distinct source/doc keys
-    if not sentence:
-        return 0.0
-    if not context_map:
-        return 0.0
-
-    # Evaluate a small set excluding current evidence if needed.
-    candidates = []
-    for c in context_map.values():
-        text = c.get("snippet") or c.get("title") or ""
-        if not text:
-            continue
-        src = c.get("doc_id") or c.get("source") or c.get("title") or c.get("chunk_id")
-        candidates.append((src, text))
-
-    if not candidates:
-        return 0.0
-
-    # distinct source estimate
-    by_source = []
-    seen = set()
-    for src, text in candidates:
-        if src in seen:
-            continue
-        seen.add(src)
-        by_source.append(text)
-        if len(by_source) >= 6:
-            break
-
-    support = 0
-    total = max(1, len(by_source))
-    for text in by_source:
-        if entailment_prob(sentence, text) >= 0.70:
-            support += 1
-
-    return round(support / total, 4)
-
-
-def _compute_citation_msa(
-    query: str,
-    answer: str,
-    citations: list[dict],
-    scope: str,
-    k: int,
-    doc_id: int | None = None,
-    source_only: str | None = None,
-) -> tuple[dict[int, dict], int]:
-    stability = _compute_stability_scores(query, k=max(k, 8), scope=scope, doc_id=doc_id, source_only=source_only)
-
-    context_by_id: dict[int, dict] = {}
-    for idx, c in enumerate(citations, start=1):
-        context_by_id[idx] = {
-            "evidence_id": c.get("evidence_id"),
-            "snippet": c.get("snippet", ""),
-            "source": c.get("source"),
-            "doc_id": c.get("doc_id"),
-            "chunk_id": c.get("chunk_id"),
-        }
-
-    sentence_rows: list[dict] = []
-    unsupported = 0
-    for sidx, sentence in enumerate(_split_answer_sentences(answer), start=1):
-        cleaned_sentence = re.sub(r"\[(?:S)?(\d+)\]", "", sentence).strip()
-        if not cleaned_sentence:
-            continue
-        cited = _extract_sentence_citation_ids(sentence)
-        if not cited:
-            unsupported += 1
-            continue
-        for cidx in cited:
-            cmeta = context_by_id.get(cidx)
-            if not cmeta:
-                unsupported += 1
-                continue
-            evidence_id = cmeta.get("evidence_id") or f"sentence-{sidx}-citation-{cidx}"
-            m = round(entailment_prob(cleaned_sentence, cmeta.get("snippet", "")), 4)
-            s = round(float(stability.get(evidence_id, 0.0)), 4)
-            a = round(_compute_agreement_score(sentence, context_by_id, evidence_id), 4)
-
-            sentence_rows.append(
-                {
-                    "sentence_id": sidx,
-                    "citation_id": cidx,
-                    "evidence_id": evidence_id,
-                    "M": m,
-                    "S": s,
-                    "A": a,
-                    "msa_score": build_confidence(
-                        top_sim=0.0,
-                        top_rerank_norm=0.0,
-                        citation_coverage=0.0,
-                        evidence_margin=0.0,
-                        ambiguity_penalty=0.0,
-                        insufficiency_penalty=0.0,
-                        msa={"M": m, "S": s, "A": a, "weights": _load_latest_calibration_weights()},
-                    )["factors"].get("msa", {}).get("msa_score", 0.0),
-                }
-            )
-
-    # Persist evidence scores (best effort, non-blocking)
-    request_id = hashlib.md5((query + answer).encode("utf-8")).hexdigest()
-    for row in sentence_rows:
-        try:
-            execute(
-                """
-                INSERT INTO evidence_scores (request_id, sentence_id, citation_id, evidence_id, m_score, s_score, a_score, score)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                [request_id, row.get("sentence_id"), row.get("citation_id"), row.get("evidence_id"), row.get("M"), row.get("S"), row.get("A"), row.get("msa_score")],
-            )
-        except Exception:
-            pass
-
-    return {int(r.get("citation_id", 0)): {"M": r.get("M"), "S": r.get("S"), "A": r.get("A") , "msa_score": r.get("msa_score")} for r in sentence_rows}, unsupported
-
 
 @app.get("/favicon.ico")
 def favicon():
@@ -1372,6 +301,7 @@ def assistant_answer(
         raise HTTPException(status_code=400, detail="query is required")
 
     qnorm = query.strip().lower()
+    answer_mode = _classify_answer_mode(query)
     doc_summary_intent = _is_uploaded_doc_summary_query(query)
     related_work_intent = _is_related_work_query(query)
     if not doc_ids:
@@ -1942,26 +872,12 @@ def assistant_answer(
             "Do not merge senses in the same paragraph.\n"
         )
 
-    prompt = (
-        "You are ScholarRAG, a citation-grounded research assistant.\n"
-        "Rules:\n"
-        f"1) Use ONLY the provided sources. General background not in sources is {'allowed' if allow_general_background else 'NOT allowed'}.\n"
-        "2) Keep answer concise and factual.\n"
-        "3) Every paragraph or bullet that contains a claim must include at least one inline citation [S#].\n"
-        "4) If you cannot support a claim from sources, do not state it.\n"
-        "5) If evidence is weak, ask clarification or say: 'I don’t have enough evidence in your uploaded documents.'\n"
-        "6) Do not invent sources.\n"
-        "7) Do NOT say you cannot access documents/files; you can read the provided context.\n\n"
-        "8) Respect source scope labels. If scope is personal_profile or course_material, do not generalize claims as "
-        "global company/world facts unless corroborated by public_reference sources.\n"
-        "9) When evidence only covers a person's role at a company, explicitly say that scope limitation.\n"
-        "10) For definition, overview, or 'tell me about' questions, format the answer as:\n"
-        "- a one-sentence definition/overview\n"
-        "- 2 to 4 short bullets for key points\n"
-        "- one short note on limitations or scope if needed\n"
-        "Keep the writing clean and non-repetitive.\n"
-        f"{compare_instruction}\n"
-        f"Question:\n{query}\n\nContext:\n{context}\n"
+    prompt = _build_generation_prompt(
+        query=query,
+        context=context,
+        answer_mode=answer_mode,
+        allow_general_background=allow_general_background,
+        compare_instruction=compare_instruction,
     )
 
     if client is None:
@@ -1997,9 +913,23 @@ def assistant_answer(
             "For this question, I need a bit more specific wording or clearer evidence in the indexed chunks. "
             "Insufficient evidence."
         )
-    if unsupported_claims > 0:
+    # Only fall back to template answers when the LLM output is critically uncited:
+    # - zero inline [S#] citations anywhere in the answer, OR
+    # - answer has _FALLBACK_MIN_PARAGRAPHS+ paragraphs but coverage < _FALLBACK_MIN_COVERAGE.
+    # Intro sentences, transitions, and conclusions legitimately lack citations —
+    # replacing a well-grounded answer just because one paragraph is citation-free
+    # is the primary cause of retrieval-dump responses instead of coherent synthesis.
+    # citation_coverage_par > 0 means _citation_coverage_stats already found at least one
+    # cited paragraph — no need for a second regex pass over the answer.
+    lacks_any_citations = citation_coverage_par == 0.0
+    sparse_multi_para = paragraph_count >= _FALLBACK_MIN_PARAGRAPHS and citation_coverage_par < _FALLBACK_MIN_COVERAGE
+    critically_uncited = lacks_any_citations or sparse_multi_para
+    if critically_uncited:
         if scope != "uploaded" and citations:
-            answer = _build_public_evidence_fallback(query, citations)
+            if answer_mode == "source_listing":
+                answer = _build_public_source_listing_answer(citations)
+            else:
+                answer = _build_public_synthesis_fallback(citations)
             citation_coverage_par, unsupported_claims, paragraph_count = _citation_coverage_stats(answer)
         elif scope == "uploaded" and related_work_intent and citations:
             answer = _build_uploaded_related_work_fallback(citations)
@@ -2010,8 +940,8 @@ def assistant_answer(
         else:
             evidence_label = _scope_evidence_label(scope)
             answer = (
-                f"I don’t have enough evidence in the selected {evidence_label} to support all claims for this query. "
-                "Please clarify the sense/topic or provide more specific sources."
+                f"I don’t have enough evidence in the selected {evidence_label} to support a grounded answer. "
+                "Try rephrasing or uploading a more relevant source."
             )
             # Do not present misleading evidence cards when answer is explicitly blocked.
             citations = []
@@ -2063,18 +993,22 @@ def assistant_answer(
     if msa_by_citation and any(c.get("msa_supported") is False for c in citations):
         unsupported_claims = max(unsupported_claims, unsupported_by_msa or unsupported_claims)
 
+    # Only replace the answer when MSA drops ALL citations AND the answer carries no
+    # inline [S#] references — meaning it genuinely hallucinated without grounding.
+    # citation_coverage_par reflects the most recently recomputed answer (post-fallback),
+    # so citation_coverage_par == 0.0 is equivalent to "no inline citations" without
+    # an extra regex scan.
     all_used_dropped = citations and all(not c.get("used_in_answer") for c in citations)
-    if all_used_dropped and answer.strip():
+    if all_used_dropped and answer.strip() and citation_coverage_par == 0.0:
         if scope == "uploaded" and citations:
             answer = _build_uploaded_evidence_fallback(query, citations)
             citation_coverage_par, unsupported_claims, paragraph_count = _citation_coverage_stats(answer)
         else:
-            answer = (
-                "I could only retrieve potential evidence, but the extracted claims do not clear the M/S/A support threshold "
-                "for a citation-grounded answer. Please clarify the query or add more specific sources."
-            )
-            citation_coverage_par = 0.0
-            unsupported_claims = 1
+            if answer_mode == "source_listing":
+                answer = _build_public_source_listing_answer(citations)
+            else:
+                answer = _build_public_synthesis_fallback(citations)
+            citation_coverage_par, unsupported_claims, paragraph_count = _citation_coverage_stats(answer)
 
     if scope == "uploaded" and doc_ids and len(doc_ids) > 1:
         citations = _rebalance_uploaded_multi_doc_citations(citations, doc_ids, k)
@@ -2084,6 +1018,9 @@ def assistant_answer(
             answer = _build_multi_doc_uploaded_summary(citations, doc_ids)
             citations = _apply_usage_boost(citations, answer)
             citation_coverage_par, unsupported_claims, paragraph_count = _citation_coverage_stats(answer)
+
+    if scope != "uploaded" and answer_mode == "source_listing":
+        answer = _append_public_source_links(answer, citations)
 
     cited_count = sum(1 for c in citations if c.get("used_in_answer"))
     if run_judge:
@@ -2174,6 +1111,7 @@ def assistant_answer(
             "used_public_fallback": used_public_fallback,
             "context_count": len(citations),
             "citations": len(citations),
+            "answer_mode": answer_mode,
             "public_provider_status": public_provider_status,
             "trust": trust,
             "confidence_score": confidence.get("score"),
@@ -2245,6 +1183,7 @@ def assistant_answer(
         },
         "retrieval_policy": {
             "mode": "uploaded-first" if scope == "uploaded" else "public-only",
+            "answer_mode": answer_mode,
             "uploaded_hits": uploaded_hits,
             "public_hits": public_hits,
             "uploaded_strength": uploaded_strength,
@@ -2732,27 +1671,11 @@ def get_latest_calibration():
         "created_at": created.isoformat() if created else None,
     }
 
-# ------------------------------
-# Load FAISS index and metadata
-# ------------------------------
-INDEX_PATH = "data/scholar_index.faiss"
-META_PATH = "data/metadata.json"
 LOG_DIR = Path("logs")
 RETRIEVAL_LOG = LOG_DIR / "retrieval.log"
 
-try:
-    index = faiss.read_index(INDEX_PATH)
-    with open(META_PATH) as f:
-        meta = json.load(f)
-    print(f"✅ Loaded FAISS index with {index.ntotal} vectors and metadata for {len(meta)} papers")
-except Exception as e:
-    print(f"❌ Error loading FAISS index or metadata: {e}")
-    index, meta = None, []
-
-retriever = Retriever(index, meta) if index is not None else None
-
 # ------------------------------
-# OpenAI Embedding Config
+# OpenAI Generation Config
 # ------------------------------
 try:
     api_key = get_openai_api_key()
@@ -2763,13 +1686,6 @@ except RuntimeError as err:
 
 # Logger for observability
 REQUEST_LOG = setup_file_logger(LOG_DIR / "requests.jsonl")
-
-def get_embedding(text: str) -> np.ndarray:
-    """Generate embedding vector for a query string."""
-    return np.array([_query_embedding(text)], dtype="float32")
-
-
-
 
 def log_request(entry: dict) -> None:
     try:
@@ -2794,75 +1710,81 @@ def trust_score(sim: float, has_doi: bool) -> float:
 def home():
     return {"message": "ScholarRAG backend is live!"}
 
+
+@app.get("/health/embeddings")
+def embeddings_health():
+    return healthcheck_embeddings()
+
 @app.get("/feed/latest")
 def latest_papers(limit: int = 10):
-    """Return latest papers from the global metadata by year (desc)."""
-    if not meta:
-        return {"results": []}
-    def year_val(m):
-        try:
-            return int(m.get("year") or 0)
-        except Exception:
-            return 0
-    sorted_meta = sorted(meta, key=year_val, reverse=True)
-    out = []
-    for m in sorted_meta[: max(1, limit)]:
-        link = None
-        if m.get("doi"):
-            link = f"https://doi.org/{m.get('doi')}"
-        elif m.get("id"):
-            link = m.get("id")
-        out.append(
+    """Return latest indexed papers from Postgres."""
+    rows = fetchall(
+        """
+        SELECT title, year, paper_id, source, source_url, abstract
+        FROM papers
+        ORDER BY COALESCE(year, 0) DESC, created_at DESC
+        LIMIT %s
+        """,
+        [max(1, limit)],
+    )
+    return {
+        "results": [
             {
-                "title": m.get("title", "Untitled"),
-                "year": m.get("year"),
-                "doi": m.get("doi"),
-                "summary": (m.get("abstract") or m.get("summary") or "")[:280],
-                "concepts": m.get("concepts", [])[:5],
-                "url": link,
+                "title": row.get("title", "Untitled"),
+                "year": row.get("year"),
+                "paper_id": row.get("paper_id"),
+                "source": row.get("source"),
+                "url": row.get("source_url"),
+                "summary": (row.get("abstract") or "")[:280],
             }
-        )
-    return {"results": out}
+            for row in rows
+        ]
+    }
 
 @app.get("/search")
 def search_papers(query: str = Query(..., description="Search query text"), k: int = 5):
-    """Return top-k relevant papers for a given query."""
-    if index is None:
-        raise HTTPException(status_code=503, detail="FAISS index not loaded.")
-
-    q_emb = get_embedding(query)
-    D, I = index.search(q_emb, k)
+    """Return top-k live public scholarly results for a given query."""
+    public_resp = public_live_search(query, k=max(1, k), return_metadata=True)
     results = []
-    for rank, idx in enumerate(I[0]):
-        if idx < len(meta):
-            meta_entry = meta[idx]
-            concepts = meta_entry.get("concepts") or []
-            results.append({
-                "rank": rank + 1,
-                "title": meta_entry.get("title", "Unknown Title"),
-                "year": meta_entry.get("year", "Unknown Year"),
-                "doi": meta_entry.get("doi", ""),
-                "concepts": concepts[:3],
-                "similarity": round(float(D[0][rank]), 3)
-            })
-    return {"query": query, "results": results}
+    for rank, row in enumerate(public_resp.get("results", []), start=1):
+        results.append(
+            {
+                "rank": rank,
+                "title": row.get("title", "Unknown Title"),
+                "year": row.get("year"),
+                "doi": row.get("doi", ""),
+                "source": row.get("source"),
+                "url": row.get("url") or row.get("source_url"),
+                "similarity": row.get("score") or row.get("similarity"),
+                "summary": (row.get("abstract") or row.get("summary") or "")[:320],
+            }
+        )
+    return {
+        "query": query,
+        "results": results,
+        "provider_status": public_resp.get("provider_status", {}),
+    }
 
 @app.get("/summarize")
 def summarize(query: str = Query(..., description="Topic to summarize")):
-    """Summarize top retrieved papers for a given query using GPT."""
-    if index is None:
-        raise HTTPException(status_code=503, detail="FAISS index not loaded.")
+    """Summarize top live scholarly results for a given query using GPT."""
     if client is None:
         raise HTTPException(status_code=503, detail="OpenAI client not configured.")
 
-    q_emb = get_embedding(query)
-    D, I = index.search(q_emb, 5)
-    numbered_titles = [
-        f"[P{i+1}] {meta[idx].get('title', 'Unknown Title')}"
-        for i, idx in enumerate(I[0])
-        if idx < len(meta)
-    ]
-    top_titles = "\n".join(numbered_titles)
+    public_resp = public_live_search(query, k=5, return_metadata=True)
+    rows = public_resp.get("results", [])
+    if not rows:
+        return {"query": query, "summary": "No relevant public sources found.", "provider_status": public_resp.get("provider_status", {})}
+
+    numbered_sources = []
+    for i, row in enumerate(rows, start=1):
+        snippet = (row.get("abstract") or row.get("summary") or "").strip()
+        if snippet:
+            snippet = snippet[:400]
+        numbered_sources.append(
+            f"[P{i}] {row.get('title', 'Unknown Title')} ({row.get('source', 'unknown')}, {row.get('year', 'n/a')})\n{snippet}"
+        )
+    top_titles = "\n\n".join(numbered_sources)
 
     prompt = (
         f"Summarize key themes and insights for '{query}' using ONLY the papers below.\n"
@@ -2875,12 +1797,10 @@ def summarize(query: str = Query(..., description="Topic to summarize")):
         temperature=0.7,
     )
     summary = completion.choices[0].message.content
-    return {"query": query, "summary": summary}
+    return {"query": query, "summary": summary, "provider_status": public_resp.get("provider_status", {})}
 
 @app.post("/ask")
 def ask(payload: dict = Body(...)):
-    if index is None or retriever is None:
-        raise HTTPException(status_code=503, detail="FAISS index not loaded.")
     if client is None:
         raise HTTPException(status_code=503, detail="OpenAI client not configured.")
 
@@ -2889,68 +1809,80 @@ def ask(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail="Missing 'query'.")
 
     k = int(payload.get("k", 10))
-    year_from = payload.get("year_from")
-    year_to = payload.get("year_to")
-    multi_hop = bool(payload.get("multi_hop", True))
-    user_id = payload.get("user_id") or "guest"
-
-    # Select per-user index if available, otherwise default global
-    local_idx, local_meta = get_user_index(user_id)
-    active_retriever = retriever
-    if local_idx is not None and local_meta:
-        active_retriever = Retriever(local_idx, local_meta)
-
     start = time.perf_counter()
-    docs, stats = active_retriever.retrieve(query, k=k, min_pool=20, year_from=year_from, year_to=year_to, multi_hop=multi_hop)
-    synthesis = synthesize_answer(query, docs)
+    public_resp = public_live_search(query, k=max(1, k), return_metadata=True)
+    rows = public_resp.get("results", [])
+    if not rows:
+        return {
+            "answer": "No relevant public sources found.",
+            "sources": [],
+            "candidate_counts": {},
+            "metrics": {"latency_ms": round((time.perf_counter() - start) * 1000, 2)},
+            "provider_status": public_resp.get("provider_status", {}),
+        }
+
+    context_blocks = []
+    for i, row in enumerate(rows, start=1):
+        snippet = (row.get("abstract") or row.get("summary") or "").strip()
+        context_blocks.append(
+            f"[P{i}] {row.get('title', 'Unknown Title')} | source={row.get('source', 'unknown')} | year={row.get('year', 'n/a')}\n{snippet}"
+        )
+    prompt = (
+        "Answer the user's scholarly question using ONLY the provided sources.\n"
+        "Every factual sentence must include an inline citation like [P1].\n"
+        "If the evidence is weak or incomplete, say so explicitly.\n\n"
+        f"Question: {query}\n\nSources:\n" + "\n\n".join(context_blocks)
+    )
+    completion = client.chat.completions.create(
+        model=RESEARCH_CHAT_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
+    )
+    answer = completion.choices[0].message.content or ""
     latency_ms = (time.perf_counter() - start) * 1000
 
     # Shape sources
     sources = []
-    for d in docs:
-        sim = round(float(d.get("_sim", 0.0)), 3)
+    for d in rows:
+        sim = round(float(d.get("score") or d.get("similarity") or 0.0), 3)
         t_score = trust_score(sim, bool(d.get("doi")))
         sources.append({
             "title": d.get("title", "Unknown Title"),
             "year": d.get("year", "Unknown Year"),
             "doi": d.get("doi", ""),
-            "openalex_id": d.get("id"),
+            "openalex_id": d.get("id") or d.get("paper_id"),
             "arxiv_id": d.get("arxiv_id"),
-            "concepts": d.get("concepts", [])[:5],
+            "concepts": (d.get("concepts") or [])[:5],
             "why_relevant": d.get("why_relevant", ""),
             "snippet": (d.get("abstract") or d.get("summary") or "")[:900],
             "similarity": sim,
             "trust_score": t_score,
             "authors": d.get("authors", []),
-            "url": d.get("url"),
+            "url": d.get("url") or d.get("source_url"),
+            "source": d.get("source"),
         })
 
     similarities = [s["similarity"] for s in sources if s.get("similarity") is not None]
     metrics = {
         "latency_ms": round(latency_ms, 2),
-        "fallback_used": stats.get("fallback_used", False),
-        "pool_size": stats.get("candidate_counts", {}).get("pool"),
-        "ranked": stats.get("candidate_counts", {}).get("scored"),
-        "openalex_added": stats.get("candidate_counts", {}).get("openalex"),
-        "arxiv_added": stats.get("candidate_counts", {}).get("arxiv"),
+        "fallback_used": False,
+        "pool_size": len(rows),
+        "ranked": len(rows),
         "max_similarity": max(similarities) if similarities else None,
         "mean_similarity": round(sum(similarities) / len(similarities), 3) if similarities else None,
-        "token_prompt": synthesis.get("usage", {}).get("prompt_tokens"),
-        "token_completion": synthesis.get("usage", {}).get("completion_tokens"),
-        "token_total": synthesis.get("usage", {}).get("total_tokens"),
+        "token_prompt": completion.usage.prompt_tokens if completion.usage else None,
+        "token_completion": completion.usage.completion_tokens if completion.usage else None,
+        "token_total": completion.usage.total_tokens if completion.usage else None,
     }
 
     log_entry = {
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "query": query,
         "k": k,
-        "year_from": year_from,
-        "year_to": year_to,
-        "multi_hop": multi_hop,
         "metrics": metrics,
-        "candidate_counts": stats.get("candidate_counts", {}),
-        "fallback_used": stats.get("fallback_used", False),
-        "hops": stats.get("hops", []),
+        "candidate_counts": {"public_results": len(rows)},
+        "fallback_used": False,
+        "public_provider_status": public_resp.get("provider_status", {}),
         "sources": [
             {
                 "title": s.get("title"),
@@ -2964,12 +1896,12 @@ def ask(payload: dict = Body(...)):
     log_request(log_entry)
 
     return {
-        "answer": synthesis.get("answer", ""),
+        "answer": answer,
         "sources": sources,
-        "fallback_used": stats.get("fallback_used", False),
-        "candidate_counts": stats.get("candidate_counts", {}),
+        "fallback_used": False,
+        "candidate_counts": {"public_results": len(rows)},
         "metrics": metrics,
-        "hops": stats.get("hops", []),
+        "provider_status": public_resp.get("provider_status", {}),
     }
 
 if __name__ == "__main__":

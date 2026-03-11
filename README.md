@@ -1,243 +1,196 @@
 # ScholarRAG
 
-ScholarRAG is a retrieval-augmented research assistant for research paper discovery, uploaded-document question answering, citation-grounded responses, and confidence-aware answer generation.
+ScholarRAG is a retrieval-augmented research assistant for:
+- uploaded PDF question answering
+- public scholarly search aggregation
+- citation-grounded answer generation
+- confidence-aware and judge-aware responses
 
-It currently combines:
-- `FastAPI` backend for ingestion, retrieval, reranking, grounding, confidence scoring, and judge evaluation
-- `React + Vite + TypeScript` frontend for document upload, multi-document chat, evidence inspection, and evaluation views
-- `Postgres + pgvector` for uploaded document chunks, embeddings, evaluation runs, and confidence artifacts
-- `FAISS` bootstrap indexing for the current local paper-index path
-- `Ollama` for embeddings
-- `OpenAI` for answer generation and judge evaluation
+Current production direction:
+- frontend on `Vercel`
+- backend as hosted `FastAPI`
+- database / pgvector / storage via `Supabase`
+- embeddings via remote or local `Ollama`
+- generation and judging via `OpenAI`
 
-## Current status
+## Architecture summary
 
-This repository is in a hybrid state:
-
-- Implemented now:
-  - uploaded PDF ingestion
-  - chunking + embedding
-  - Postgres-backed uploaded-document retrieval
-  - citation-grounded answering
-  - confidence metadata
-  - judge / calibration tables
-  - multi-provider public retrieval aggregation
-  - local frontend/backend development flow
-
-- Still present from the earlier local architecture:
-  - FAISS-based paper index bootstrap
-  - local runtime artifact folders such as `data/`, `storage/`, and `logs/`
-
-- Deployment target being implemented:
-  - frontend on `Vercel`
-  - backend as hosted `FastAPI`
-  - cloud database/storage via `Supabase`
-  - `Ollama` embeddings + `OpenAI` generation/judge
-
-Do not treat the project as fully migrated away from FAISS yet. The codebase is currently a mixed local/cloud architecture with a clear path toward a more production-oriented Supabase/Postgres deployment.
-
-## Architecture
-
-### Current implemented architecture
+### Runtime architecture
 
 - `frontend/`
-  - React SPA for upload, chat, evidence panel, and evaluation screens
+  - React + Vite + TypeScript SPA
+  - upload, multi-doc selection, chat, evidence panel, evaluation views
 
-- `backend/`
-  - `backend/app.py`: primary API entrypoint and orchestration
-  - `backend/pdf_ingest.py`: PDF ingestion, chunking, embedding storage, uploaded-doc search
-  - `backend/public_search.py`: public scholarly source aggregation and reranking
-  - `backend/chat.py`: chat session and upload routes
-  - `backend/services/db.py`: DB connection and SQL helpers
-  - `backend/services/embeddings.py`: OpenAI/Ollama embedding abstraction
-  - `backend/services/judge.py`: answer faithfulness / judge logic
-  - `backend/confidence.py`: confidence scoring utilities
+- `backend/app.py`
+  - main API orchestration
+  - routes uploaded-doc and public-search questions
+  - builds grounded answer responses
+  - exposes retrieval, confidence, judge, and health outputs
+
+- `backend/pdf_ingest.py`
+  - PDF extraction
+  - chunking
+  - chunk embedding insertion
+  - uploaded-document vector retrieval from Postgres / pgvector
+
+- `backend/public_search.py`
+  - multi-provider scholarly aggregation
+  - provider contribution tracking
+  - hybrid scoring over public candidates
+
+- `backend/services/embeddings.py`
+  - centralized embedding contract
+  - query and document embedding via Ollama HTTP
+  - retries, timeouts, schema validation, healthcheck
+
+- `backend/services/db.py`
+  - database connection helpers
 
 - `db/init.sql`
-  - base schema for:
-    - `documents`
-    - `chunks`
-    - `chunk_embeddings`
-    - `chat_sessions`
-    - `chat_messages`
-    - `eval_runs`
-    - `confidence_calibration`
-    - `evidence_scores`
-    - `evaluation_judge_runs`
+  - Postgres / pgvector schema
+  - documents, chunks, chunk embeddings, chat, eval, confidence tables
 
-### Target deployment architecture
+## Embedding architecture
 
-- Frontend: `Vercel`
-- Backend: hosted `FastAPI`
-- Database: `Supabase Postgres`
-- Storage: `Supabase Storage`
-- Embeddings: `Ollama`
-- Generation: `OpenAI`
-- Judge evaluation: `OpenAI`
-- Retrieval: uploaded-doc Postgres retrieval + public multi-provider aggregation
+ScholarRAG now uses one centralized embedding service:
 
-## Public retrieval aggregation flow
+- provider: `ollama`
+- model: `mxbai-embed-large`
+- query prefix: configurable
+- document prefix: configurable
+- batching: configurable
+- remote host: configurable
 
-When a public query is given, ScholarRAG is designed to aggregate results across multiple scholarly APIs and return one merged final result set.
+Important:
+- embeddings are generated through an Ollama-compatible HTTP endpoint
+- the backend never assumes Ollama runs inside Vercel
+- production should point `OLLAMA_BASE_URL` at a separate host or VM
 
-Current aggregation path in `backend/public_search.py`:
+### Current vector storage contract
 
-- `OpenAlex`
-- `arXiv`
-- `Crossref`
-- `Semantic Scholar`
-- `Springer`
-- `Elsevier`
-- `IEEE`
+The active embedding model is `mxbai-embed-large`.
 
-Flow:
+Its raw output dimension is tracked separately from the vector-store dimension:
+- raw embedding dimension: `1024`
+- current pgvector storage dimension: `1536`
 
-1. Normalize the user query into a search-friendly form.
-2. Fetch candidate records from all enabled providers.
-3. Deduplicate records by DOI / provider ID / title.
-4. Compute:
-   - dense similarity using embeddings
-   - sparse lexical overlap score
-5. Build a hybrid score.
-6. Return one reranked merged list as the final public retrieval result.
+The embedding service pads vectors to the configured store dimension so the current schema remains compatible while avoiding a dangerous full vector-column rewrite during this refactor.
 
-This is the correct high-level flow for your project.
+To avoid accidental vector mixing, chunk embeddings now store:
+- `provider`
+- `model`
+- `embedding_version`
+- `dim`
 
-Important implementation note:
+Uploaded retrieval filters on the current embedding contract, so query-time retrieval only uses vectors from the active provider/model/version.
 
-- Not every configured provider is currently operational in your environment.
-- `Elsevier` and `IEEE` are currently failing authorization in your setup.
-- The aggregator still works because the final result is built from whichever providers successfully return candidates.
+## Public scholarly aggregation flow
 
-So yes, keeping the “aggregate across APIs, merge, rerank, and return one final result” flow is the right design.
+When a public query is given:
+
+1. normalize query
+2. query enabled providers
+3. deduplicate candidates
+4. embed candidates and compute hybrid score
+5. rerank merged results
+6. build one final result set
+7. generate grounded answer from those results
+
+Current providers wired:
+- OpenAlex
+- arXiv
+- Crossref
+- Semantic Scholar
+- Springer
+- Elsevier
+- IEEE
+
+Provider contribution status is tracked and returned in response metadata so you can see which APIs contributed to the final public answer.
+
+If a provider is misconfigured or unauthorized, the aggregator continues using the providers that succeed.
 
 ## Uploaded-document flow
 
-1. User uploads one or more PDFs.
-2. Backend extracts text and splits it into chunks.
-3. Chunks are embedded using the configured embedding provider.
-4. Chunks and vectors are stored in Postgres.
-5. User asks a question over selected documents.
-6. Backend retrieves the most relevant chunk evidence from the selected docs.
-7. Evidence is reranked and passed into answer generation.
-8. Answer is returned with citations, confidence metadata, and optional judge results.
+1. upload PDF
+2. extract page-aware text
+3. chunk text into retrieval-friendly segments
+4. embed chunks with the centralized embedding service
+5. store document, chunks, and chunk embeddings in Postgres
+6. retrieve relevant chunks for selected docs at query time
+7. rerank and build grounded answer context
+8. generate answer with citations
+9. attach confidence and optional judge output
 
-## Multi-document QA flow
+For multi-document retrieval:
+- selected document ids are passed explicitly
+- retrieval is rebalanced across selected docs
+- multi-doc summary prompts are phrased differently from single-doc prompts
 
-For multi-document questions, the intended behavior is:
+## Confidence / judge / evaluation
 
-1. User selects multiple uploaded docs.
-2. Retrieval pulls evidence from all selected docs.
-3. Evidence is rebalanced so one file does not dominate the pool.
-4. Answer generation should organize output by document when the request is summary/comparison-oriented.
-5. Final output includes:
-   - answer text
-   - citations
-   - confidence
-   - supporting evidence panel
+ScholarRAG includes:
+- citation-grounded answers
+- confidence objects
+- M/S/A-style evidence score tables
+- judge run storage
+- calibration storage
 
-This is also the right flow to keep.
+### Evaluation hooks
 
-## Confidence and trust layer
+Added scripts:
+- `scripts/reindex_embeddings.py`
+  - rebuild chunk embeddings for the active provider/model/version
+- `scripts/eval_retrieval.py`
+  - evaluate uploaded-doc retrieval with:
+    - `Recall@5`
+    - `Recall@10`
+    - `MRR`
+    - `nDCG@10`
 
-ScholarRAG currently includes:
-
-- citation grounding
-- answer confidence objects
-- M/S/A-style support tracking in the schema
-- judge evaluation support
-- calibration storage tables
-
-Current confidence objects expose:
+Expected eval set format:
 
 ```json
-{
-  "score": 0.0,
-  "label": "Low|Med|High",
-  "needs_clarification": false,
-  "factors": {
-    "top_sim": 0.0,
-    "top_rerank_norm": 0.0,
-    "citation_coverage": 0.0,
-    "evidence_margin": 0.0,
-    "ambiguity_penalty": 0.0,
-    "insufficiency_penalty": 0.0
-  },
-  "explanation": "..."
-}
+[
+  {
+    "query": "What skills are listed in the resume?",
+    "doc_ids": [1, 2],
+    "relevant_chunk_ids": [10, 14],
+    "relevant_doc_ids": [1]
+  }
+]
 ```
 
-## Sense resolver and scope guard
-
-The backend includes guards for:
-
-- ambiguous terms such as `transformer`, `python`, `java`, `react`
-- company/entity questions that only have resume-style evidence
-- evidence-insufficient answers that should be limited or clarified rather than hallucinated
-
-This is aligned with the direction you want for a more rigorous ScholarRAG system.
-
-## Data and storage
-
-Current local/runtime artifacts:
-
-- `data/scholar_index.faiss`
-- `data/metadata.json`
-- `storage/`
-- `logs/`
-
-Current database-backed uploaded-doc path:
-
-- `documents`
-- `chunks`
-- `chunk_embeddings`
-- `chat_sessions`
-- `chat_messages`
-- `eval_runs`
-- `confidence_calibration`
-- `evidence_scores`
-- `evaluation_judge_runs`
+This is intentionally lightweight so you can compare embedding models later, including `mxbai-embed-large` vs `text-embedding-3-large`.
 
 ## Environment configuration
 
-Create local env file:
+Copy:
 
 ```bash
 cp .env.example .env
 ```
 
-Core required values:
+Key variables:
 
-- `OPENAI_API_KEY`
-- `RESEARCH_CHAT_MODEL`
-- `EMBEDDING_PROVIDER`
+```env
+OPENAI_API_KEY=
+RESEARCH_CHAT_MODEL=gpt-4o-mini
 
-For Ollama embeddings:
+EMBEDDING_PROVIDER=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_EMBED_MODEL=mxbai-embed-large
+EMBEDDING_QUERY_PREFIX=Represent this sentence for searching relevant passages:
+EMBEDDING_DOC_PREFIX=Represent this document for retrieval:
+EMBEDDING_BATCH_SIZE=16
+EMBEDDING_VERSION=mxbai-embed-large-v1
+EMBEDDING_RAW_DIM=1024
+VECTOR_STORE_DIM=1536
 
-- `EMBEDDING_PROVIDER=ollama`
-- `OLLAMA_BASE_URL=http://127.0.0.1:11434`
-- `OLLAMA_EMBED_MODEL=nomic-embed-text`
-
-For DB / cloud path:
-
-- `DATABASE_URL`
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `SUPABASE_JWT_SECRET`
-- `VITE_SUPABASE_URL`
-- `VITE_SUPABASE_ANON_KEY`
-
-Optional public provider keys:
-
-- `OPENALEX_API_KEY`
-- `SPRINGER_API_KEY`
-- `IEEE_API_KEY`
-- `ELSEVIER_API_KEY`
-- `SEMANTIC_SCHOLAR_API_KEY`
-
-Important note:
-
-- `OpenAI` is still required for answer generation and judge evaluation in the current architecture.
+DATABASE_URL=
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_JWT_SECRET=
+```
 
 ## Local development
 
@@ -245,24 +198,28 @@ Important note:
 
 ```bash
 ollama serve
-ollama pull nomic-embed-text
+ollama pull mxbai-embed-large
 ```
 
-### 2. Start backend
+### 2. Start Postgres locally or use Supabase
+
+Local Docker option:
+
+```bash
+docker compose up -d db adminer
+```
+
+### 3. Start backend
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
-pip install fastapi "uvicorn[standard]" sqlalchemy psycopg2-binary pgvector python-dotenv requests openai pydantic PyPDF2 python-multipart faiss-cpu numpy google-auth
-uvicorn backend.app:app --reload --reload-dir backend --host 127.0.0.1 --port 8000
+pip install -r requirements.txt
+uvicorn backend.app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Backend docs:
-
-- `http://127.0.0.1:8000/docs`
-
-### 3. Start frontend
+### 4. Start frontend
 
 ```bash
 cd frontend
@@ -270,54 +227,108 @@ npm ci
 npm run dev
 ```
 
-Frontend:
+## Re-indexing after model change
 
-- `http://127.0.0.1:5173`
+If you change embedding model, provider, or version:
 
-## Deployment target for today
+1. update `.env`
+2. run schema migration if needed
+3. rebuild embeddings
 
-The deployment direction you should keep is:
+```bash
+source .venv/bin/activate
+python scripts/reindex_embeddings.py --purge-all
+```
 
-1. Frontend deploy to `Vercel`
-2. Backend deploy separately as `FastAPI`
-3. Use `Supabase` for hosted Postgres and storage
-4. Keep `Ollama` for embeddings where available
-5. Keep `OpenAI` for answer generation and judge
+This prevents silent mixing of embeddings produced by different models.
 
-Be explicit during deployment that:
+## Healthcheck
 
-- the current codebase still contains local FAISS/local-storage pieces
-- the cloud path is the target production architecture
-- some public providers may need credential fixes before being enabled in production
+Backend endpoint:
 
-## API surface
+```text
+GET /health/embeddings
+```
 
-- `GET /`
-- `POST /assistant/answer`
-- `POST /assistant/chat`
-- `POST /documents/upload`
-- `POST /documents/search/chunks`
-- `GET /documents/latest`
-- `DELETE /documents/{doc_id}`
-- `POST /eval/run`
-- `GET /eval/runs`
+It verifies:
+- Ollama endpoint reachability
+- embedding response shape
+- active provider/model/version
+- configured vector dimensions
 
-## Known limitations right now
+## Production deployment notes
 
-- FAISS is still part of the local architecture
-- UI polish is still in progress
-- multi-document summarization behavior is being actively refined
-- Elsevier and IEEE credentials/endpoints are not currently working in this environment
-- cloud deployment architecture is not yet fully completed end to end
+### Frontend
 
-## Recommendation
+- deploy `frontend/` to `Vercel`
+- set:
+  - `VITE_API_BASE_URL`
+  - `VITE_SUPABASE_URL`
+  - `VITE_SUPABASE_ANON_KEY`
 
-The flow you want to keep is sound:
+### Backend
 
-- aggregate all public scholarly APIs
-- merge and rerank into one final evidence set
-- answer only from evidence
-- attach citations and confidence
-- use judge/calibration as the trust layer
+Deploy FastAPI separately from Vercel functions for production safety.
 
-That is the right system design for ScholarRAG.
+Reason:
+- Vercel Functions are not a safe place to assume local Ollama access
+- the backend needs stable network access to:
+  - remote Ollama
+  - Supabase Postgres
+  - public scholarly APIs
+  - OpenAI
+
+Recommended:
+- host backend on a VM / container platform
+- point `OLLAMA_BASE_URL` to a remote Ollama host
+
+### Supabase
+
+Use Supabase for:
+- Postgres
+- pgvector storage
+- auth
+- storage integration
+
+### Remote Ollama
+
+Production must use a separate Ollama-compatible host.
+
+Example:
+
+```env
+OLLAMA_BASE_URL=https://your-ollama-host.example.com
+OLLAMA_EMBED_MODEL=mxbai-embed-large
+```
+
+Do not deploy Ollama inside Vercel.
+
+## Docker usage notes
+
+Docker is kept for:
+- local Postgres consistency
+- optional local/backend container runtime
+- optional self-hosted backend deployment
+- optional Ollama co-hosting on a VM
+
+Docker is not used for:
+- Vercel frontend runtime
+- pretending Ollama exists inside Vercel Functions
+
+Useful commands:
+
+```bash
+docker compose --profile ollama up -d ollama
+docker compose --profile backend up -d backend db
+```
+
+## Removed legacy pieces
+
+The active runtime no longer depends on FAISS.
+
+Removed from the repository:
+- legacy FAISS retriever runtime path
+- legacy per-user FAISS store helpers
+- legacy FAISS index builder scripts
+
+This refactor keeps the project aligned with a Supabase/Postgres + remote-Ollama production architecture.

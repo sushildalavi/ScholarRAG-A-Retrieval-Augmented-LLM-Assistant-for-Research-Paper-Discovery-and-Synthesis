@@ -13,7 +13,14 @@ from openai import OpenAI
 from PyPDF2 import PdfReader
 
 from backend.services.db import execute, fetchall, fetchone
-from backend.services.embeddings import get_embedding, get_embeddings
+from backend.services.embeddings import (
+    embed_documents,
+    embed_query,
+    get_embedding_model,
+    get_embedding_version,
+    get_provider,
+    get_raw_embedding_dims,
+)
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -27,6 +34,11 @@ DOC_TYPES = {"resume", "research_paper", "official_doc", "assignment", "notes", 
 
 def _ensure_doc_type_schema() -> None:
     execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_type TEXT DEFAULT 'other'")
+    execute("ALTER TABLE chunk_embeddings ADD COLUMN IF NOT EXISTS provider TEXT DEFAULT 'unknown'")
+    execute("ALTER TABLE chunk_embeddings ADD COLUMN IF NOT EXISTS embedding_version TEXT DEFAULT 'v1'")
+    execute("ALTER TABLE embedding_cache ADD COLUMN IF NOT EXISTS provider TEXT DEFAULT 'unknown'")
+    execute("ALTER TABLE embedding_cache ADD COLUMN IF NOT EXISTS model TEXT DEFAULT 'unknown'")
+    execute("ALTER TABLE embedding_cache ADD COLUMN IF NOT EXISTS embedding_version TEXT DEFAULT 'v1'")
     # Backfill obvious research-paper docs for older rows.
     execute(
         """
@@ -58,90 +70,161 @@ def _extract_pdf_text(data: bytes) -> List[Tuple[int, str]]:
     return pages
 
 
-def _chunk_text(text: str, target_min: int = 300, target_max: int = 700, overlap: int = 50) -> List[str]:
+def _chunk_text(text: str, target_min: int = 420, target_max: int = 620, overlap: int = 100) -> List[str]:
     """
-    Sentence-aware chunking for better semantic retrieval.
+    Structure-aware, token-window chunking with overlap and recursive fallback.
+
+    Strategy:
+    1. Preserve obvious structural units (headings / paragraphs).
+    2. Build chunks in a target token window.
+    3. Carry overlap across chunk boundaries.
+    4. Recursively split oversized blocks by paragraph, sentence, then raw tokens.
     """
     text = _sanitize_text(text or "")
     if not text.strip():
         return []
 
-    # Normalize whitespace while preserving paragraph boundaries.
-    normalized = re.sub(r"[ \t]+", " ", text)
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", normalized) if p.strip()]
+    target_min = max(220, min(int(target_min), 520))
+    target_max = max(target_min + 80, min(int(target_max), 760))
+    overlap = max(40, min(int(overlap), 140))
+
+    def token_count(value: str) -> int:
+        return len(value.split())
+
+    def is_heading(block: str) -> bool:
+        stripped = block.strip()
+        if not stripped:
+            return False
+        words = stripped.split()
+        if len(words) > 18:
+            return False
+        if re.match(r"^\d+(\.\d+)*\s+[A-Z]", stripped):
+            return True
+        if stripped.endswith(":") and len(words) <= 12:
+            return True
+        letters = [c for c in stripped if c.isalpha()]
+        if not letters:
+            return False
+        uppercase_ratio = sum(1 for c in letters if c.isupper()) / max(1, len(letters))
+        return uppercase_ratio > 0.72
+
+    def split_sentences(block: str) -> List[str]:
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9(\"'])", block) if s.strip()]
+        return sentences or [block.strip()]
+
+    def split_token_windows(block: str, max_tokens: int, overlap_tokens: int) -> List[str]:
+        words = block.split()
+        if not words:
+            return []
+        windows: List[str] = []
+        start = 0
+        while start < len(words):
+            end = min(len(words), start + max_tokens)
+            piece = " ".join(words[start:end]).strip()
+            if piece:
+                windows.append(piece)
+            if end >= len(words):
+                break
+            start = max(start + 1, end - overlap_tokens)
+        return windows
+
+    def split_recursive(block: str) -> List[str]:
+        block = block.strip()
+        if not block:
+            return []
+        if token_count(block) <= target_max:
+            return [block]
+
+        paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", block) if p.strip()]
+        if len(paragraphs) > 1:
+            out: List[str] = []
+            for paragraph in paragraphs:
+                out.extend(split_recursive(paragraph))
+            return out
+
+        sentences = split_sentences(block)
+        if len(sentences) > 1:
+            out: List[str] = []
+            current: List[str] = []
+            current_tokens = 0
+            for sentence in sentences:
+                st = token_count(sentence)
+                if current and current_tokens + st > target_max:
+                    out.append(" ".join(current).strip())
+                    current = [sentence]
+                    current_tokens = st
+                else:
+                    current.append(sentence)
+                    current_tokens += st
+            if current:
+                out.append(" ".join(current).strip())
+            flattened: List[str] = []
+            for item in out:
+                if token_count(item) > target_max:
+                    flattened.extend(split_token_windows(item, target_max, overlap))
+                else:
+                    flattened.append(item)
+            return flattened
+
+        return split_token_windows(block, target_max, overlap)
+
+    normalized = re.sub(r"\r\n?", "\n", text)
+    raw_blocks = [b.strip() for b in re.split(r"\n\s*\n+", normalized) if b.strip()]
+    structure_blocks: List[str] = []
+    buffer: List[str] = []
+    for block in raw_blocks:
+        if is_heading(block):
+            if buffer:
+                structure_blocks.append("\n\n".join(buffer).strip())
+                buffer = []
+            structure_blocks.append(block)
+        else:
+            buffer.append(block)
+    if buffer:
+        structure_blocks.append("\n\n".join(buffer).strip())
+
     units: List[str] = []
-
-    for p in paragraphs:
-        # Split on sentence boundaries, but keep simple fallback for noisy OCR text.
-        sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9(\"'])", p) if s.strip()]
-        if len(sents) <= 1:
-            sents = [p]
-        units.extend(sents)
-
-    if not units:
-        return []
-
-    # More retrieval-friendly defaults for research PDFs.
-    target_min = max(110, min(int(target_min), 180))
-    target_max = max(220, min(int(target_max), 320))
-    overlap = max(20, min(int(overlap), 40))
+    for block in structure_blocks:
+        units.extend(split_recursive(block))
 
     chunks: List[str] = []
     current: List[str] = []
     current_tokens = 0
 
-    def _flush(force: bool = False):
+    def build_overlap_context(parts: List[str]) -> tuple[list[str], int]:
+        kept: List[str] = []
+        kept_tokens = 0
+        for piece in reversed(parts):
+            pt = token_count(piece)
+            if kept and kept_tokens + pt > overlap:
+                break
+            kept.append(piece)
+            kept_tokens += pt
+        kept = list(reversed(kept))
+        return kept, sum(token_count(p) for p in kept)
+
+    def flush(force: bool = False) -> None:
         nonlocal current, current_tokens
         if not current:
             return
         if not force and current_tokens < target_min and chunks:
             return
-        chunks.append(" ".join(current).strip())
-        if overlap > 0:
-            kept: List[str] = []
-            tok = 0
-            for sent in reversed(current):
-                st = len(sent.split())
-                if tok + st > overlap and kept:
-                    break
-                kept.append(sent)
-                tok += st
-            current = list(reversed(kept))
-            current_tokens = sum(len(s.split()) for s in current)
-        else:
-            current = []
-            current_tokens = 0
+        chunk = "\n\n".join(current).strip()
+        if chunk:
+            chunks.append(chunk)
+        current, current_tokens = build_overlap_context(current) if overlap > 0 else ([], 0)
 
-    for sent in units:
-        sent_words = sent.split()
-        if not sent_words:
+    for unit in units:
+        ut = token_count(unit)
+        if ut == 0:
             continue
+        if current and current_tokens + ut > target_max:
+            flush(force=True)
+        current.append(unit)
+        current_tokens += ut
 
-        # Hard-wrap very long sentence-like segments.
-        if len(sent_words) > target_max:
-            _flush(force=True)
-            i = 0
-            while i < len(sent_words):
-                j = min(len(sent_words), i + target_max)
-                piece = " ".join(sent_words[i:j]).strip()
-                if piece:
-                    chunks.append(piece)
-                if j >= len(sent_words):
-                    i = j
-                else:
-                    i = max(i + 1, j - overlap)
-            current = []
-            current_tokens = 0
-            continue
-
-        if current and (current_tokens + len(sent_words) > target_max):
-            _flush(force=True)
-
-        current.append(sent)
-        current_tokens += len(sent_words)
-
-    _flush(force=True)
-    return [c for c in chunks if c]
+    flush(force=True)
+    return [chunk for chunk in chunks if chunk.strip()]
 
 
 def _sanitize_text(text: str) -> str:
@@ -189,7 +272,11 @@ def _embed_and_store_chunks(document_id: int, chunks: List[Tuple[int, int, str]]
     if not clean_chunks:
         return 0
 
-    embeddings = get_embeddings([text for _, _, text in clean_chunks])
+    embeddings = embed_documents([text for _, _, text in clean_chunks])
+    provider = get_provider()
+    model = get_embedding_model()
+    version = get_embedding_version()
+    raw_dim = get_raw_embedding_dims()
     inserted = 0
     for (page_no, chunk_idx, text), emb in zip(clean_chunks, embeddings):
         row = fetchone(
@@ -203,10 +290,10 @@ def _embed_and_store_chunks(document_id: int, chunks: List[Tuple[int, int, str]]
         cid = row["id"]
         execute(
             """
-            INSERT INTO chunk_embeddings (chunk_id, model, dim, vector)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO chunk_embeddings (chunk_id, provider, model, embedding_version, dim, vector)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            [cid, "text-embedding-3-small", 1536, emb],
+            [cid, provider, model, version, raw_dim, emb],
         )
         inserted += 1
     return inserted
@@ -359,7 +446,10 @@ def search_chunks(payload: dict = None, q: str = None, k: int = 10, doc_id: Opti
         except Exception:
             raise HTTPException(status_code=400, detail="doc_ids must be a list of integers")
 
-    qvec = get_embedding(q)
+    qvec = embed_query(q)
+    provider = get_provider()
+    model = get_embedding_model()
+    version = get_embedding_version()
 
     if doc_ids:
         per_doc_limit = max(1, math.ceil(int(k) / max(1, len(doc_ids))))
@@ -383,6 +473,9 @@ def search_chunks(payload: dict = None, q: str = None, k: int = 10, doc_id: Opti
               JOIN chunks ON chunk_embeddings.chunk_id = chunks.id
               JOIN documents ON documents.id = chunks.document_id
               WHERE documents.status = 'ready'
+                AND chunk_embeddings.provider = %s
+                AND chunk_embeddings.model = %s
+                AND chunk_embeddings.embedding_version = %s
                 AND chunks.document_id = ANY(%s)
             )
             SELECT id, document_id, title, doc_type, text, page_no, chunk_index, distance
@@ -391,11 +484,19 @@ def search_chunks(payload: dict = None, q: str = None, k: int = 10, doc_id: Opti
             ORDER BY distance ASC
             LIMIT {int(k)}
             """,
-            [qvec, qvec, doc_ids],
+            [qvec, qvec, provider, model, version, doc_ids],
         )
     else:
         params = [qvec]
         where_clauses = ["documents.status = 'ready'"]
+        where_clauses.extend(
+            [
+                "chunk_embeddings.provider = %s",
+                "chunk_embeddings.model = %s",
+                "chunk_embeddings.embedding_version = %s",
+            ]
+        )
+        params.extend([provider, model, version])
         if doc_id:
             where_clauses.append("chunks.document_id = %s")
             params.append(doc_id)

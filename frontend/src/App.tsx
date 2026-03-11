@@ -1,211 +1,16 @@
-import { Dispatch, SetStateAction, useEffect, useMemo, useRef, useState } from 'react';
-import { api } from './api/client';
-import { Citation, ConfidenceObject, DocumentRow, EvalCase, EvalRunResponse, WhyTraceChunk } from './api/types';
-import { JudgeCasePayload, JudgeRunResponse, JudgeRunSummary, MsaCalibrationPayload, MsaCalibrationResponse, MsaCalibrationLatest } from './api/types';
-import { SearchBar } from './components/SearchBar';
-import { UploadPanel } from './components/UploadPanel';
-import { LatestDocumentsList } from './components/LatestDocumentsList';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { API_BASE, api } from './api/client';
+import {
+  Citation, ConfidenceObject, DocumentRow, EvalCase,
+  EvalRunResponse, WhyTraceChunk,
+} from './api/types';
+import {
+  JudgeCasePayload, JudgeRunResponse, JudgeRunSummary,
+  MsaCalibrationPayload, MsaCalibrationResponse, MsaCalibrationLatest,
+} from './api/types';
 
-function confidenceText(c?: ConfidenceObject): string {
-  if (!c) return 'No confidence metadata';
-  const f = c.factors;
-  const msa = f.msa ? ` M=${f.msa.M.toFixed(2)} S=${f.msa.S.toFixed(2)} A=${f.msa.A.toFixed(2)} score=${f.msa.msa_score.toFixed(3)}.` : '';
-  return `Confidence reflects evidence strength and coverage, penalized for ambiguity/insufficiency. `
-    + `top_sim=${f.top_sim.toFixed(4)}, top_rerank_norm=${f.top_rerank_norm.toFixed(4)}, `
-    + `citation_coverage=${f.citation_coverage.toFixed(4)}, evidence_margin=${f.evidence_margin.toFixed(4)}, `
-    + `ambiguity_penalty=${f.ambiguity_penalty.toFixed(4)}, insufficiency_penalty=${f.insufficiency_penalty.toFixed(4)}${msa}`;
-}
-
-function ConfidenceBadge({ confidence }: { confidence?: ConfidenceObject }) {
-  if (!confidence) return null;
-  if (confidence.needs_clarification) {
-    return <div className="ans-confidence low" title={confidenceText(confidence)}>Needs clarification</div>;
-  }
-  const pct = Math.round((confidence.score || 0) * 100);
-  const raw = (confidence.label || 'Low').toLowerCase();
-  const cls = raw === 'high' || raw === 'med' || raw === 'low' ? raw : 'low';
-  return (
-    <div className={`ans-confidence ${cls}`} title={confidenceText(confidence)}>
-      <span>{confidence.label}</span>
-      <span>{pct}%</span>
-    </div>
-  );
-}
-
-function renderWithInlineCitations(text: string) {
-  const normalized = (text || '')
-    .replace(/\[(?:S)?(\d+)\]/g, '[$1]')
-    .replace(/([.,;:!?])\s*(\[\d+\])\s*([.,;:!?]+)/g, '$1 $2')
-    .replace(/(\[\d+\])\s*([.,;:!?]+)/g, '$2 $1')
-    .replace(/([.,;:!?])\s*([.,;:!?])+\s*(\[\d+\])/g, '$1 $3')
-    .replace(/\s+([.,;:!?])/g, '$1')
-    .replace(/(\[\d+\])([A-Za-z0-9])/g, '$1 $2')
-    .replace(/([.,;:!?])([A-Za-z0-9])/g, '$1 $2');
-
-  const chunks = normalized.split(/(\[\d+\])/g);
-  return chunks.map((part, i) => {
-    const m = part.match(/^\[(\d+)\]$/);
-    if (!m) return <span key={i}>{part}</span>;
-    return (
-      <sup key={i} className="inline-cite" title={`Source ${m[1]}`}>
-        [{m[1]}]
-      </sup>
-    );
-  });
-}
-
-function WhyAnswerSection({ why }: { why?: { rerank_changed_order: boolean; top_chunks: WhyTraceChunk[] } }) {
-  return null;
-}
-
-function SourceModal({ chunk, onClose }: { chunk: WhyTraceChunk | null; onClose: () => void }) {
-  if (!chunk) return null;
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <strong>{chunk.title || `Document ${chunk.doc_id || '?'}`}</strong>
-          <button onClick={onClose}>Close</button>
-        </div>
-        <div className="modal-meta">chunk {chunk.chunk_id ?? '?'} • p.{chunk.page ?? '?'}</div>
-        <div className="modal-content">{chunk.snippet_preview || 'No snippet available.'}</div>
-      </div>
-    </div>
-  );
-}
-
-function DeleteDocumentModal({
-  document,
-  onCancel,
-  onConfirm,
-}: {
-  document: DocumentRow | null;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  if (!document) return null;
-  return (
-    <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal-card delete-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <strong>Delete document</strong>
-          <button onClick={onCancel}>Close</button>
-        </div>
-        <div className="modal-content">
-          <p>
-            You are removing <strong>{document.title}</strong>.
-          </p>
-          <p>
-            Its chunks and embeddings will be deleted, and ScholarRAG will stop using it for retrieval and answers.
-          </p>
-        </div>
-        <div className="delete-modal-actions">
-          <button className="ghost" onClick={onCancel}>Cancel</button>
-          <button className="danger-btn" onClick={onConfirm}>Delete</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SourcesPanel({ citations, traceChunks }: { citations: Citation[]; traceChunks: WhyTraceChunk[] }) {
-  const [showCitedOnly, setShowCitedOnly] = useState(true);
-  const [modalChunk, setModalChunk] = useState<WhyTraceChunk | null>(null);
-  const confidenceById = useMemo(() => {
-    const m = new Map<number, ConfidenceObject>();
-    (citations || []).forEach((c, i) => {
-      const sid = c.id || i + 1;
-      if (c.confidence_obj) m.set(sid, c.confidence_obj);
-    });
-    return m;
-  }, [citations]);
-
-  const sourceRows = useMemo(() => {
-    const traceById = new Map<number, WhyTraceChunk>();
-    (traceChunks || []).forEach((t, i) => {
-      const id = t.id || i + 1;
-      traceById.set(id, t);
-    });
-    const base = (citations || []).map((c, i) => {
-      const id = c.id || i + 1;
-      const trace = traceById.get(id);
-      return {
-        id,
-        title: c.title || trace?.title || `Document ${c.doc_id ?? trace?.doc_id ?? '?'}`,
-        doc_id: c.doc_id ?? trace?.doc_id,
-        msa: c.msa,
-        msa_supported: c.msa_supported,
-        url: c.url,
-        source: c.source,
-        page: c.page ?? trace?.page,
-        cited: c.used_in_answer ?? trace?.cited,
-        snippet_preview: trace?.snippet_preview || '',
-      };
-    });
-    const filtered = showCitedOnly ? base.filter((x) => x.cited) : base;
-    return filtered.length ? filtered : base;
-  }, [traceChunks, citations, showCitedOnly]);
-
-  if (!sourceRows.length) return null;
-
-  return (
-    <>
-      <div className="sources-panel compact">
-        <div className="sources-head">
-          <div className="sources-title">Sources</div>
-          <div className="scope-toggle">
-            <button className={showCitedOnly ? 'active' : ''} onClick={() => setShowCitedOnly(true)}>Cited only</button>
-            <button className={!showCitedOnly ? 'active' : ''} onClick={() => setShowCitedOnly(false)}>Top retrieved</button>
-          </div>
-        </div>
-        <div className="sources-list">
-          {sourceRows.map((c, idx) => (
-            <button className="source-item source-item-btn" key={`${c.id || idx}-${idx}`} onClick={() => setModalChunk(c)}>
-                <div className="source-row">
-                  <div className="source-tag-wrap">
-                    <span className="source-tag">S{c.id || idx + 1}</span>
-                    {c.cited ? <span className="source-scope scope-uploaded-document">Cited</span> : null}
-                  </div>
-                  <div className="source-conf-wrap">
-                    {c.msa?.msa_score != null ? (
-                      <span className="source-conf">
-                        MSA {Math.round((c.msa.msa_score || 0) * 100)}%
-                        {c.msa_supported ? null : ' (weak)'}
-                      </span>
-                    ) : (
-                      confidenceById.get((c.id || idx + 1)) ? (
-                        <span
-                          className="source-conf"
-                          title={confidenceText(confidenceById.get((c.id || idx + 1)))}
-                        >
-                          {confidenceById.get((c.id || idx + 1))?.label} {Math.round((confidenceById.get((c.id || idx + 1))?.score || 0) * 100)}%
-                        </span>
-                      ) : <span className="source-conf">Source</span>
-                    )}
-                  </div>
-                </div>
-              <div className="source-name">{c.title || `Document ${c.doc_id || '?'}`}</div>
-              <div className="source-sub">
-                {(c.source || 'source').toString()}
-                {typeof c.page === 'number' ? ` • p.${c.page}` : ''}
-                {c.url ? (
-                  <>
-                    {' • '}
-                    <a className="source-link" href={c.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
-                      Open source
-                    </a>
-                  </>
-                ) : null}
-              </div>
-              {c.snippet_preview ? <div className="source-snippet">{c.snippet_preview}</div> : null}
-            </button>
-          ))}
-        </div>
-      </div>
-      <SourceModal chunk={modalChunk} onClose={() => setModalChunk(null)} />
-    </>
-  );
-}
+// ── Types ─────────────────────────────────────────────────────────────────────
+type Page = 'studio' | 'eval';
 
 type UiMessage = {
   role: 'you' | 'assistant';
@@ -223,34 +28,354 @@ type UiMessage = {
   query_ref?: string;
 };
 
-function isFollowUpQuery(text: string): boolean {
-  const q = (text || '').trim().toLowerCase();
+type SourceRow = {
+  id: number;
+  title: string;
+  doc_id?: number;
+  msa?: { msa_score: number };
+  msa_supported?: boolean;
+  url?: string;
+  source?: string;
+  page?: number;
+  cited?: boolean;
+  snippet_preview?: string;
+  confidence_obj?: ConfidenceObject;
+};
+
+// ── Markdown renderer ─────────────────────────────────────────────────────────
+function renderInline(text: string): ReactNode {
+  const nodes: ReactNode[] = [];
+  const pattern = /(\*\*(.+?)\*\*|\*(.+?)\*|`([^`]+)`|\[S?(\d+)\])/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(text)) !== null) {
+    if (m.index > last) nodes.push(text.slice(last, m.index));
+    if (m[2] != null)      nodes.push(<strong key={m.index}>{m[2]}</strong>);
+    else if (m[3] != null) nodes.push(<em key={m.index}>{m[3]}</em>);
+    else if (m[4] != null) nodes.push(<code key={m.index}>{m[4]}</code>);
+    else if (m[5] != null) nodes.push(<span key={m.index} className="cite-chip">{m[5]}</span>);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes.length === 1 ? nodes[0] : <>{nodes}</>;
+}
+
+function renderMarkdown(raw: string): ReactNode {
+  const lines = (raw || '').split('\n');
+  const out: ReactNode[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    if (!trimmed) { i++; continue; }
+
+    if (/^[-*_]{3,}$/.test(trimmed)) { out.push(<hr key={i} />); i++; continue; }
+
+    const hm = line.match(/^(#{1,6})\s+(.+)/);
+    if (hm) {
+      const lvl = Math.min(hm[1].length, 3);
+      const Tag = `h${lvl}` as 'h1' | 'h2' | 'h3';
+      out.push(<Tag key={i}>{renderInline(hm[2])}</Tag>);
+      i++; continue;
+    }
+
+    if (line.startsWith('> ')) {
+      out.push(<blockquote key={i}>{renderInline(line.slice(2))}</blockquote>);
+      i++; continue;
+    }
+
+    if (/^[-*+]\s/.test(line)) {
+      const items: ReactNode[] = [];
+      while (i < lines.length && /^[-*+]\s/.test(lines[i])) {
+        items.push(<li key={i}>{renderInline(lines[i].replace(/^[-*+]\s+/, ''))}</li>);
+        i++;
+      }
+      out.push(<ul key={`ul${i}`}>{items}</ul>);
+      continue;
+    }
+
+    if (/^\d+[.)]\s/.test(line)) {
+      const items: ReactNode[] = [];
+      while (i < lines.length && /^\d+[.)]\s/.test(lines[i])) {
+        items.push(<li key={i}>{renderInline(lines[i].replace(/^\d+[.)]\s+/, ''))}</li>);
+        i++;
+      }
+      out.push(<ol key={`ol${i}`}>{items}</ol>);
+      continue;
+    }
+
+    const pLines: string[] = [];
+    while (i < lines.length) {
+      const l = lines[i];
+      const t = l.trim();
+      if (!t || /^[-*_]{3,}$/.test(t) || /^#{1,6}\s/.test(l) ||
+          l.startsWith('> ') || /^[-*+]\s/.test(l) || /^\d+[.)]\s/.test(l)) break;
+      pLines.push(l);
+      i++;
+    }
+    if (pLines.length) out.push(<p key={`p${i}`}>{renderInline(pLines.join(' '))}</p>);
+  }
+  return <div className="md">{out}</div>;
+}
+
+// ── Confidence badge ──────────────────────────────────────────────────────────
+function confidenceTooltip(c: ConfidenceObject): string {
+  const f = c.factors;
+  const msa = f.msa ? ` | M=${f.msa.M.toFixed(2)} S=${f.msa.S.toFixed(2)} A=${f.msa.A.toFixed(2)}` : '';
+  return `sim=${f.top_sim.toFixed(3)} cov=${f.citation_coverage.toFixed(3)} margin=${f.evidence_margin.toFixed(3)}${msa}`;
+}
+
+function ConfBadge({ confidence }: { confidence?: ConfidenceObject }) {
+  if (!confidence) return null;
+  if (confidence.needs_clarification) {
+    return <span className="conf-badge needs-clarification">Clarify</span>;
+  }
+  const pct = Math.round((confidence.score || 0) * 100);
+  const raw = (confidence.label || 'Low').toLowerCase();
+  const cls = ['high', 'med', 'low'].includes(raw) ? raw : 'low';
+  return (
+    <span className={`conf-badge ${cls}`} title={confidenceTooltip(confidence)}>
+      {confidence.label} {pct}%
+    </span>
+  );
+}
+
+// ── Source card ───────────────────────────────────────────────────────────────
+function SourceCard({ row, idx, onClick }: { row: SourceRow; idx: number; onClick: () => void }) {
+  const msaScore = row.msa?.msa_score;
+  const confPct = msaScore != null
+    ? Math.round(msaScore * 100)
+    : row.confidence_obj ? Math.round((row.confidence_obj.score || 0) * 100) : null;
+  const rawLabel = msaScore != null
+    ? (row.msa_supported ? 'high' : 'low')
+    : (row.confidence_obj?.label?.toLowerCase() || 'default');
+  const confCls = ['high', 'med', 'low'].includes(rawLabel) ? rawLabel : 'default';
+
+  return (
+    <button
+      className={`source-card${row.cited ? ' cited' : ''}`}
+      onClick={onClick}
+      style={{ animationDelay: `${idx * 40}ms` }}
+    >
+      <div className="sc-head">
+        <span className="sc-num">S{row.id}</span>
+        <span className="sc-title">{row.title || `Document ${row.doc_id ?? '?'}`}</span>
+        {confPct != null && <span className={`sc-conf ${confCls}`}>{confPct}%</span>}
+      </div>
+      <div className="sc-meta">
+        <span>{String(row.source || 'source')}</span>
+        {typeof row.page === 'number' && <><span className="sc-dot">·</span><span>p.{row.page}</span></>}
+        {row.cited && <><span className="sc-dot">·</span><span style={{ color: 'var(--green)' }}>cited</span></>}
+        {row.url && (
+          <><span className="sc-dot">·</span>
+          <a className="sc-link" href={row.url} target="_blank" rel="noreferrer"
+             onClick={(e) => e.stopPropagation()}>Open ↗</a></>
+        )}
+      </div>
+      {row.snippet_preview && <div className="sc-snippet">{row.snippet_preview}</div>}
+    </button>
+  );
+}
+
+// ── Typing indicator ──────────────────────────────────────────────────────────
+function TypingIndicator() {
+  return (
+    <div className="typing-row">
+      <div className="msg-avatar assistant">SR</div>
+      <div className="typing-bubble">
+        <div className="t-dot" />
+        <div className="t-dot" />
+        <div className="t-dot" />
+      </div>
+    </div>
+  );
+}
+
+// ── Source detail modal ───────────────────────────────────────────────────────
+function SourceModal({ row, onClose }: { row: SourceRow | null; onClose: () => void }) {
+  if (!row) return null;
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div>
+            <div className="modal-head-title">{row.title || `Document ${row.doc_id ?? '?'}`}</div>
+            <div className="modal-head-meta">
+              S{row.id} · {String(row.source || 'source')}{typeof row.page === 'number' ? ` · p.${row.page}` : ''}
+            </div>
+          </div>
+          <button className="modal-close" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">{row.snippet_preview || 'No snippet available.'}</div>
+        {row.url && (
+          <div className="modal-actions">
+            <a className="btn btn-ghost btn-sm" href={row.url} target="_blank" rel="noreferrer">
+              Open source ↗
+            </a>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Delete confirm modal ──────────────────────────────────────────────────────
+function DeleteModal({
+  doc, onCancel, onConfirm,
+}: { doc: DocumentRow | null; onCancel: () => void; onConfirm: () => void }) {
+  if (!doc) return null;
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div className="modal-head-title">Delete document</div>
+          <button className="modal-close" onClick={onCancel}>✕</button>
+        </div>
+        <div className="modal-body">
+          <p>Remove <strong>{doc.title}</strong> from your workspace?</p>
+          <p style={{ marginTop: 10 }}>
+            All chunks and embeddings will be deleted permanently.
+          </p>
+        </div>
+        <div className="modal-actions">
+          <button className="btn btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
+          <button className="btn btn-danger btn-sm" onClick={onConfirm}>Delete</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Evidence panel ────────────────────────────────────────────────────────────
+function EvidencePanel({
+  citations, traceChunks, loading, allowGeneralBackground,
+}: {
+  citations: Citation[];
+  traceChunks: WhyTraceChunk[];
+  loading: boolean;
+  allowGeneralBackground: boolean;
+}) {
+  const [showCitedOnly, setShowCitedOnly] = useState(true);
+  const [modalRow, setModalRow] = useState<SourceRow | null>(null);
+
+  const rows = useMemo<SourceRow[]>(() => {
+    const traceById = new Map<number, WhyTraceChunk>();
+    (traceChunks || []).forEach((t, i) => traceById.set(t.id || i + 1, t));
+    return (citations || []).map((c, i) => {
+      const id = c.id || i + 1;
+      const trace = traceById.get(id);
+      return {
+        id,
+        title: c.title || trace?.title || `Document ${c.doc_id ?? trace?.doc_id ?? '?'}`,
+        doc_id: c.doc_id ?? trace?.doc_id,
+        msa: c.msa,
+        msa_supported: c.msa_supported,
+        url: c.url,
+        source: c.source,
+        page: c.page ?? trace?.page,
+        cited: c.used_in_answer ?? trace?.cited,
+        snippet_preview: trace?.snippet_preview || '',
+        confidence_obj: c.confidence_obj,
+      };
+    });
+  }, [citations, traceChunks]);
+
+  const visible = useMemo(() => {
+    const filtered = showCitedOnly ? rows.filter((r) => r.cited) : rows;
+    return filtered.length ? filtered : rows;
+  }, [rows, showCitedOnly]);
+
+  const citedCount = rows.filter((r) => r.cited).length;
+
+  return (
+    <>
+      <div className="evidence-panel">
+        <div className="evidence-head">
+          <div className="evidence-head-row">
+            <div>
+              <div className="evidence-head-title">Evidence</div>
+              {!loading && rows.length > 0 && (
+                <div className="evidence-head-sub">{rows.length} sources · {citedCount} cited</div>
+              )}
+            </div>
+            {!loading && rows.length > 0 && (
+              <div className="ev-scope-toggle">
+                <button className={showCitedOnly ? 'active' : ''} onClick={() => setShowCitedOnly(true)}>Cited</button>
+                <button className={!showCitedOnly ? 'active' : ''} onClick={() => setShowCitedOnly(false)}>All</button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="evidence-body">
+          {loading ? (
+            <>
+              <div style={{ padding: '6px 2px 12px', color: 'var(--text-2)', fontSize: 12 }}>
+                {allowGeneralBackground ? 'Searching public sources…' : 'Retrieving evidence…'}
+              </div>
+              <div className="ev-skeleton-list">
+                {[0, 1, 2].map((n) => (
+                  <div key={n} className="ev-skeleton-card" style={{ animationDelay: `${n * 80}ms` }}>
+                    <div className="sk-row sk-full" />
+                    <div className="sk-row sk-3q" />
+                    <div className="sk-row sk-half" />
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : visible.length === 0 ? (
+            <div className="evidence-empty">
+              <div className="evidence-empty-icon">⬡</div>
+              <div className="evidence-empty-text">
+                Click any assistant reply to inspect its grounding sources here.
+              </div>
+            </div>
+          ) : (
+            visible.map((row, idx) => (
+              <SourceCard key={`${row.id}-${idx}`} row={row} idx={idx} onClick={() => setModalRow(row)} />
+            ))
+          )}
+        </div>
+
+        <div className="evidence-foot">
+          Confidence reflects retrieval quality and citation coverage. Hover badges for details.
+        </div>
+      </div>
+      <SourceModal row={modalRow} onClose={() => setModalRow(null)} />
+    </>
+  );
+}
+
+// ── Follow-up query helpers ───────────────────────────────────────────────────
+function isFollowUp(text: string): boolean {
+  const q = text.trim().toLowerCase();
   if (!q) return false;
   const cues = [
-    'from ieee', 'from springer', 'from elsevier', 'from arxiv', 'from openalex',
-    'give from', 'give relevant', 'the one written by', 'that one', 'this one',
-    'from semantic scholar',
+    'from ieee', 'from springer', 'from elsevier', 'from arxiv',
+    'that one', 'this one', 'give me papers', 'relevant papers', 'more info',
   ];
   return q.split(/\s+/).length <= 8 || cues.some((c) => q.includes(c));
 }
 
-function enrichWithPreviousTopic(current: string, messages: UiMessage[]): string {
-  const q = (current || '').trim();
-  if (!isFollowUpQuery(q)) return q;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role !== 'you') continue;
-    const prev = (m.text || '').trim();
-    if (!prev) continue;
-    if (prev.toLowerCase() === q.toLowerCase()) continue;
-    if (!isFollowUpQuery(prev) && prev.split(/\s+/).length >= 5) {
-      return `${q} about ${prev}`;
+function enrichQuery(current: string, msgs: UiMessage[]): string {
+  const q = current.trim();
+  if (!isFollowUp(q)) return q;
+  const wantsPapers = /\b(papers?|research|studies|references?|surveys?)\b/i.test(q);
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.role !== 'you' || !m.text.trim()) continue;
+    if (m.text.toLowerCase() === q.toLowerCase()) continue;
+    if (!isFollowUp(m.text) && m.text.split(/\s+/).length >= 5) {
+      return wantsPapers
+        ? `Find relevant research papers about ${m.text}. Include foundational, survey, and highly relevant papers.`
+        : `${q} about ${m.text}`;
     }
   }
   return q;
 }
 
-function EvalPage() {
+// ── Eval page ─────────────────────────────────────────────────────────────────
+function EvalPage({ onBack }: { onBack: () => void }) {
   const [name, setName] = useState('Local eval run');
   const [k, setK] = useState(10);
   const [rawCases, setRawCases] = useState('[\n  {"query":"DES key size", "expected_doc_id": 48}\n]');
@@ -258,290 +383,251 @@ function EvalPage() {
   const [error, setError] = useState('');
   const [result, setResult] = useState<EvalRunResponse | null>(null);
   const [runs, setRuns] = useState<EvalRunResponse[]>([]);
+
   const [judgeScope, setJudgeScope] = useState<'uploaded' | 'public'>('uploaded');
   const [judgeK, setJudgeK] = useState(10);
-  const [judgeRawCases, setJudgeRawCases] = useState('[\n  {\"query\":\"What is the main contribution?\", \"scope\":\"uploaded\", \"allow_general_background\": false}\n]');
+  const [judgeRaw, setJudgeRaw] = useState('[\n  {"query":"What is the main contribution?", "scope":"uploaded"}\n]');
   const [judgeRunning, setJudgeRunning] = useState(false);
   const [judgeError, setJudgeError] = useState('');
   const [judgeResult, setJudgeResult] = useState<JudgeRunResponse | null>(null);
   const [judgeRuns, setJudgeRuns] = useState<JudgeRunSummary[]>([]);
-  const [calibrationRaw, setCalibrationRaw] = useState('{\n  \"records\":[\n    {\"sentence\":\"The model can answer from evidence\", \"evidence\":\"retrieved chunk contains the claim\", \"M\":0.82, \"S\":0.75, \"A\":0.70, \"label\":\"strong\"}\n  ]\n}');
-  const [calibrationRunning, setCalibrationRunning] = useState(false);
-  const [calibrationError, setCalibrationError] = useState('');
-  const [calibration, setCalibration] = useState<MsaCalibrationResponse | null>(null);
-  const [calibrationLatest, setCalibrationLatest] = useState<MsaCalibrationLatest | null>(null);
 
-  const loadRuns = async () => {
-    const res = await api.listEvalRuns(20);
-    setRuns(res.runs || []);
-  };
-  const loadJudgeRuns = async () => {
-    const res = await api.listJudgeRuns(20);
-    setJudgeRuns(res.runs || []);
-  };
-  const loadCalibrationLatest = async () => {
-    const latest = await api.getLatestCalibration();
-    setCalibrationLatest(latest || null);
-  };
+  const [calibRaw, setCalibRaw] = useState('{\n  "records": [\n    {"sentence":"The model answers from evidence","evidence":"chunk contains the claim","M":0.82,"S":0.75,"A":0.70,"label":"strong"}\n  ]\n}');
+  const [calibRunning, setCalibRunning] = useState(false);
+  const [calibError, setCalibError] = useState('');
+  const [calibResult, setCalibResult] = useState<MsaCalibrationResponse | null>(null);
+  const [calibLatest, setCalibLatest] = useState<MsaCalibrationLatest | null>(null);
 
   useEffect(() => {
-    loadRuns().catch(() => undefined);
-    loadJudgeRuns().catch(() => undefined);
-    loadCalibrationLatest().catch(() => undefined);
+    api.listEvalRuns(20).then((r) => setRuns(r.runs || [])).catch(() => undefined);
+    api.listJudgeRuns(20).then((r) => setJudgeRuns(r.runs || [])).catch(() => undefined);
+    api.getLatestCalibration().then((r) => setCalibLatest(r || null)).catch(() => undefined);
   }, []);
 
   const runEval = async () => {
-    setError('');
-    setRunning(true);
+    setError(''); setRunning(true);
     try {
-      const parsed = JSON.parse(rawCases) as EvalCase[];
-      const res = await api.runEval({ name, scope: 'uploaded', k, cases: parsed });
+      const cases = JSON.parse(rawCases) as EvalCase[];
+      const res = await api.runEval({ name, scope: 'uploaded', k, cases });
       setResult(res);
-      await loadRuns();
-    } catch (e: any) {
-      setError(e?.message || 'Failed to run eval');
-    } finally {
-      setRunning(false);
-    }
+      const r = await api.listEvalRuns(20);
+      setRuns(r.runs || []);
+    } catch (e: any) { setError(e?.message || 'Failed'); }
+    finally { setRunning(false); }
   };
 
-  const runJudgeEval = async () => {
-    setJudgeError('');
-    setJudgeRunning(true);
+  const runJudge = async () => {
+    setJudgeError(''); setJudgeRunning(true);
     try {
-      const parsed = JSON.parse(judgeRawCases) as JudgeCasePayload[];
-      const res = await api.runJudge({
-        scope: judgeScope,
-        k: judgeK,
-        run_judge_llm: true,
-        cases: parsed,
-      });
+      const cases = JSON.parse(judgeRaw) as JudgeCasePayload[];
+      const res = await api.runJudge({ scope: judgeScope, k: judgeK, run_judge_llm: true, cases });
       setJudgeResult(res);
-      await loadJudgeRuns();
-    } catch (e: any) {
-      setJudgeError(e?.message || 'Failed to run judge eval');
-    } finally {
-      setJudgeRunning(false);
-    }
+      const r = await api.listJudgeRuns(20);
+      setJudgeRuns(r.runs || []);
+    } catch (e: any) { setJudgeError(e?.message || 'Failed'); }
+    finally { setJudgeRunning(false); }
   };
 
-  const runCalibration = async () => {
-    setCalibrationError('');
-    setCalibrationRunning(true);
+  const runCalib = async () => {
+    setCalibError(''); setCalibRunning(true);
     try {
-      const parsedPayload = JSON.parse(calibrationRaw) as unknown;
-      const records = (() => {
-        if (
-          parsedPayload &&
-          typeof parsedPayload === 'object' &&
-          Array.isArray((parsedPayload as { records?: unknown[] }).records)
-        ) {
-          return (parsedPayload as { records: unknown[] }).records;
-        }
-        if (Array.isArray(parsedPayload)) {
-          return parsedPayload;
-        }
-        return null;
-      })();
-      if (!records || records.length === 0) {
-        throw new Error('Calibration payload must include a non-empty records array');
-      }
-      const payload: MsaCalibrationPayload = {
-        model_name: 'msa_manual',
-        label: 'manual',
-        ...(parsedPayload as MsaCalibrationPayload),
-        records: records as MsaCalibrationPayload['records'],
-      };
+      const parsed = JSON.parse(calibRaw) as any;
+      const records = Array.isArray(parsed) ? parsed : (parsed?.records || null);
+      if (!records?.length) throw new Error('records array required');
+      const payload: MsaCalibrationPayload = { model_name: 'msa_manual', label: 'manual', ...parsed, records };
       const res = await api.calibrateConfidence(payload);
-      setCalibration(res);
-      await loadCalibrationLatest();
-    } catch (e: any) {
-      setCalibrationError(e?.message || 'Failed to run calibration');
-    } finally {
-      setCalibrationRunning(false);
-    }
+      setCalibResult(res);
+      const latest = await api.getLatestCalibration();
+      setCalibLatest(latest);
+    } catch (e: any) { setCalibError(e?.message || 'Failed'); }
+    finally { setCalibRunning(false); }
   };
-
-  const row = (label: string, a: number, b: number) => (
-    <tr key={label}>
-      <td>{label}</td>
-      <td>{a.toFixed(3)}</td>
-      <td>{b.toFixed(3)}</td>
-    </tr>
-  );
 
   return (
     <div className="eval-page">
-      <div className="eval-header">
-        <h1>Evaluation</h1>
-        <button
-          className="ghost"
-          onClick={() => {
-            window.history.pushState({}, '', '/');
-            window.dispatchEvent(new PopStateEvent('popstate'));
-          }}
-        >
-          Back to Studio
-        </button>
+      <div className="eval-topbar">
+        <h1>Evaluation Studio</h1>
+        <button className="btn btn-ghost btn-sm" onClick={onBack}>← Back to Chat</button>
       </div>
+
       <div className="eval-grid">
         <div className="eval-card">
-          <label>Judge scope</label>
+          <h3>LLM Judge Evaluation</h3>
+          <label>Scope</label>
           <select value={judgeScope} onChange={(e) => setJudgeScope(e.target.value as 'uploaded' | 'public')}>
-            <option value="uploaded">uploaded</option>
-            <option value="public">public</option>
+            <option value="uploaded">Uploaded</option>
+            <option value="public">Public</option>
           </select>
-          <label>Judge K</label>
-          <input type="number" value={judgeK} onChange={(e) => setJudgeK(Number(e.target.value || 10))} />
-          <label>Judge test set JSON (query + optional answer/citations)</label>
-          <textarea rows={10} value={judgeRawCases} onChange={(e) => setJudgeRawCases(e.target.value)} />
-          <button onClick={runJudgeEval} disabled={judgeRunning}>{judgeRunning ? 'Running judge...' : 'Run LLM-judge eval'}</button>
-          {judgeError ? <div className="alert">{judgeError}</div> : null}
-          {judgeResult ? (
-            <p style={{ marginTop: 12 }}>
-              Judge mean score: <strong>{Math.round((judgeResult.metrics.mean_overall_score || 0) * 100)}%</strong> •
-              unsupported claims: <strong>{judgeResult.metrics.unsupported_total || 0}</strong>
-            </p>
-          ) : null}
+          <label>Top K</label>
+          <input type="number" value={judgeK} onChange={(e) => setJudgeK(Number(e.target.value) || 10)} />
+          <label>Test cases JSON</label>
+          <textarea rows={8} value={judgeRaw} onChange={(e) => setJudgeRaw(e.target.value)} />
+          <button className="btn btn-primary btn-sm" onClick={runJudge} disabled={judgeRunning}>
+            {judgeRunning ? 'Running…' : 'Run judge eval'}
+          </button>
+          {judgeError && <div className="alert">{judgeError}</div>}
+          {judgeResult && (
+            <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 4, lineHeight: 1.8 }}>
+              Mean score: <strong style={{ color: 'var(--text)' }}>{Math.round((judgeResult.metrics.mean_overall_score || 0) * 100)}%</strong>
+              {' · '}Unsupported: <strong style={{ color: 'var(--text)' }}>{judgeResult.metrics.unsupported_total || 0}</strong>
+            </div>
+          )}
         </div>
 
         <div className="eval-card">
-          <label>M/S/A calibration records JSON (records / label / M/S/A / weights)</label>
-          <textarea rows={12} value={calibrationRaw} onChange={(e) => setCalibrationRaw(e.target.value)} />
-          <button onClick={runCalibration} disabled={calibrationRunning}>{calibrationRunning ? 'Calibrating...' : 'Fit MSA calibration'}</button>
-          {calibrationError ? <div className="alert">{calibrationError}</div> : null}
-          {calibration ? (
-            <div style={{ marginTop: 12 }}>
-              <p>
-                Last fit ({calibration.model_name}) used {calibration.records_used} records.
-              </p>
-              <p>
-                Weights: w1={calibration.weights.w1} w2={calibration.weights.w2} w3={calibration.weights.w3} b={calibration.weights.b}
-              </p>
-              <p>Brier: {calibration.metrics.brier} • Accuracy: {calibration.metrics.accuracy}</p>
+          <h3>M/S/A Calibration</h3>
+          <label>Calibration records JSON</label>
+          <textarea rows={12} value={calibRaw} onChange={(e) => setCalibRaw(e.target.value)} />
+          <button className="btn btn-primary btn-sm" onClick={runCalib} disabled={calibRunning}>
+            {calibRunning ? 'Calibrating…' : 'Fit MSA calibration'}
+          </button>
+          {calibError && <div className="alert">{calibError}</div>}
+          {calibResult && (
+            <div style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.8 }}>
+              <div>{calibResult.model_name} · {calibResult.records_used} records used</div>
+              <div>Brier: {calibResult.metrics.brier} · Accuracy: {calibResult.metrics.accuracy}</div>
             </div>
-          ) : null}
-          {calibrationLatest ? (
-            <div style={{ marginTop: 12 }}>
-              <p>Latest calibration: {calibrationLatest.model_name} ({calibrationLatest.label})</p>
-              <p>dataset={calibrationLatest.dataset_size} updated={calibrationLatest.created_at || 'n/a'}</p>
+          )}
+          {calibLatest && (
+            <div style={{ fontSize: 11, color: 'var(--text-3)', borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+              Latest: {calibLatest.model_name} ({calibLatest.label}) · {calibLatest.dataset_size} records
             </div>
-          ) : null}
+          )}
         </div>
 
         <div className="eval-card">
+          <h3>Retrieval Evaluation</h3>
           <label>Run name</label>
           <input value={name} onChange={(e) => setName(e.target.value)} />
           <label>Top K</label>
-          <input type="number" value={k} onChange={(e) => setK(Number(e.target.value || 10))} />
-          <label>Test set JSON (query + expected_doc_id)</label>
-          <textarea rows={10} value={rawCases} onChange={(e) => setRawCases(e.target.value)} />
-          <button onClick={runEval} disabled={running}>{running ? 'Running...' : 'Run evaluation'}</button>
-          {error ? <div className="alert">{error}</div> : null}
+          <input type="number" value={k} onChange={(e) => setK(Number(e.target.value) || 10)} />
+          <label>Test cases JSON</label>
+          <textarea rows={8} value={rawCases} onChange={(e) => setRawCases(e.target.value)} />
+          <button className="btn btn-primary btn-sm" onClick={runEval} disabled={running}>
+            {running ? 'Running…' : 'Run evaluation'}
+          </button>
+          {error && <div className="alert">{error}</div>}
         </div>
 
         <div className="eval-card">
           <h3>Latest result</h3>
-          {!result ? <p>No run yet.</p> : (
+          {!result ? (
+            <p style={{ color: 'var(--text-3)', fontSize: 13 }}>No run yet.</p>
+          ) : (
             <>
               <table className="eval-table">
                 <thead>
-                  <tr><th>Metric</th><th>Retrieval only</th><th>Retrieval + rerank</th></tr>
+                  <tr><th>Metric</th><th>Retrieval</th><th>+Rerank</th></tr>
                 </thead>
                 <tbody>
-                  {row('Recall@1', result.metrics_retrieval_only.recall_at['1'], result.metrics_retrieval_rerank.recall_at['1'])}
-                  {row('Recall@3', result.metrics_retrieval_only.recall_at['3'], result.metrics_retrieval_rerank.recall_at['3'])}
-                  {row('Recall@5', result.metrics_retrieval_only.recall_at['5'], result.metrics_retrieval_rerank.recall_at['5'])}
-                  {row('Recall@10', result.metrics_retrieval_only.recall_at['10'], result.metrics_retrieval_rerank.recall_at['10'])}
-                  {row('MRR', result.metrics_retrieval_only.mrr, result.metrics_retrieval_rerank.mrr)}
-                  {row('nDCG@3', result.metrics_retrieval_only.ndcg_at['3'], result.metrics_retrieval_rerank.ndcg_at['3'])}
-                  {row('nDCG@5', result.metrics_retrieval_only.ndcg_at['5'], result.metrics_retrieval_rerank.ndcg_at['5'])}
-                  {row('nDCG@10', result.metrics_retrieval_only.ndcg_at['10'], result.metrics_retrieval_rerank.ndcg_at['10'])}
+                  {(['1', '3', '5', '10'] as const).map((n) => (
+                    <tr key={n}>
+                      <td>Recall@{n}</td>
+                      <td>{result.metrics_retrieval_only.recall_at[n]?.toFixed(3) ?? '–'}</td>
+                      <td>{result.metrics_retrieval_rerank.recall_at[n]?.toFixed(3) ?? '–'}</td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <td>MRR</td>
+                    <td>{result.metrics_retrieval_only.mrr.toFixed(3)}</td>
+                    <td>{result.metrics_retrieval_rerank.mrr.toFixed(3)}</td>
+                  </tr>
                 </tbody>
               </table>
-
-              <div className="latency-bars">
-                <div>
-                  <span>Retrieve avg {result.latency_breakdown.retrieve_ms_avg} ms</span>
-                  <div className="bar"><i style={{ width: `${Math.min(100, result.latency_breakdown.retrieve_ms_avg)}%` }} /></div>
-                </div>
-                <div>
-                  <span>Rerank avg {result.latency_breakdown.rerank_ms_avg} ms</span>
-                  <div className="bar"><i style={{ width: `${Math.min(100, result.latency_breakdown.rerank_ms_avg)}%` }} /></div>
-                </div>
-                <div>
-                  <span>Generate avg {result.latency_breakdown.generate_ms_avg} ms</span>
-                  <div className="bar"><i style={{ width: `${Math.min(100, result.latency_breakdown.generate_ms_avg)}%` }} /></div>
-                </div>
+              <div className="lat-bars">
+                {([
+                  ['Retrieve', result.latency_breakdown.retrieve_ms_avg],
+                  ['Rerank', result.latency_breakdown.rerank_ms_avg],
+                  ['Generate', result.latency_breakdown.generate_ms_avg],
+                ] as [string, number][]).map(([label, val]) => (
+                  <div key={label} className="lat-row">
+                    <span className="lat-label">{label} {Math.round(val)} ms</span>
+                    <div className="lat-bar">
+                      <div className="lat-fill" style={{ width: `${Math.min(100, val / 3000 * 100)}%` }} />
+                    </div>
+                  </div>
+                ))}
               </div>
             </>
           )}
         </div>
       </div>
 
-      <div className="eval-card">
-        <h3>Stored runs</h3>
+      <div className="eval-card" style={{ marginBottom: 16 }}>
+        <h3>Stored eval runs</h3>
         <div className="run-list">
-          {runs.map((r) => (
-            <div key={`${r.run_id}-${r.created_at}`} className="run-item">
-              <strong>{r.name}</strong>
-              <span>{r.created_at}</span>
-              <span>cases {r.case_count} • R@5 {r.metrics_retrieval_rerank?.recall_at?.['5'] ?? '-'}</span>
-            </div>
-          ))}
+          {runs.length === 0
+            ? <div style={{ color: 'var(--text-3)', fontSize: 13 }}>No runs yet.</div>
+            : runs.map((r) => (
+              <div key={`${r.run_id}-${r.created_at}`} className="run-item">
+                <strong>{r.name}</strong>
+                <span>{r.created_at}</span>
+                <span>{r.case_count} cases</span>
+                <span>R@5 {r.metrics_retrieval_rerank?.recall_at?.['5'] ?? '–'}</span>
+              </div>
+            ))}
         </div>
       </div>
 
       <div className="eval-card">
-          <h3>Judge runs</h3>
+        <h3>Judge runs</h3>
         <div className="run-list">
-          {judgeRuns.length === 0 ? <p>No judge runs yet.</p> : null}
-          {judgeRuns.map((run, idx) => (
-            <div key={`${run.id}-${idx}`} className="run-item">
-              <strong>{run.scope || judgeScope}</strong>
-              <span>run {run.id}</span>
-              <span>query {run.query_count || 0}</span>
-              <span>mean overall {Math.round(((run.metrics && run.metrics.mean_overall_score) || 0) * 100)}%</span>
-            </div>
-          ))}
+          {judgeRuns.length === 0
+            ? <div style={{ color: 'var(--text-3)', fontSize: 13 }}>No judge runs yet.</div>
+            : judgeRuns.map((r, idx) => (
+              <div key={`${r.id}-${idx}`} className="run-item">
+                <strong>{r.scope || judgeScope}</strong>
+                <span>Run {r.id}</span>
+                <span>{r.query_count || 0} queries</span>
+                <span>Mean {Math.round(((r.metrics?.mean_overall_score) || 0) * 100)}%</span>
+              </div>
+            ))}
         </div>
       </div>
     </div>
   );
 }
 
-function StudioPage() {
-  const [activeView, setActiveView] = useState<'home' | 'library' | 'agent'>('home');
+// ── Studio page ───────────────────────────────────────────────────────────────
+const STORAGE_KEY = 'scholarrag_studio_v2';
+
+function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
   const [docs, setDocs] = useState<DocumentRow[]>([]);
   const [selectedDocs, setSelectedDocs] = useState<number[]>([]);
-  const [questionDoc, setQuestionDoc] = useState('');
+  const [messages, setMessages] = useState<UiMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const [allowGeneralBackground, setAllowGeneralBackground] = useState(false);
-  const [compareSenses, setCompareSenses] = useState(false);
-  const [runJudge, setRunJudge] = useState(false);
-  const [loadingDoc, setLoadingDoc] = useState(false);
-  const [errorDoc, setErrorDoc] = useState('');
-  const [docMessages, setDocMessages] = useState<UiMessage[]>([]);
-  const askDocRef = useRef<HTMLInputElement | null>(null);
-  const answersAreaRef = useRef<HTMLDivElement | null>(null);
-  const evidenceBodyRef = useRef<HTMLDivElement | null>(null);
   const [activeEvidence, setActiveEvidence] = useState<{ citations: Citation[]; trace: WhyTraceChunk[] }>({ citations: [], trace: [] });
+  const [activeEvidenceMsgIdx, setActiveEvidenceMsgIdx] = useState(-1);
   const [pendingDelete, setPendingDelete] = useState<DocumentRow | null>(null);
-  const streamTimersRef = useRef<number[]>([]);
-  const STUDIO_STATE_KEY = 'scholarrag_studio_state_v1';
+  const [dragActive, setDragActive] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<{ text: string; state: 'idle' | 'uploading' | 'done' | 'err' }>({ text: '', state: 'idle' });
+  const [uploadPct, setUploadPct] = useState(0);
 
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const streamTimers = useRef<number[]>([]);
+
+  // Restore session
   useEffect(() => {
     try {
-      const raw = sessionStorage.getItem(STUDIO_STATE_KEY);
+      const raw = sessionStorage.getItem(STORAGE_KEY);
       if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed.docMessages)) setDocMessages(parsed.docMessages);
-      if (typeof parsed.questionDoc === 'string') setQuestionDoc(parsed.questionDoc);
-      if (parsed.activeEvidence) setActiveEvidence(parsed.activeEvidence);
-      if (Array.isArray(parsed.selectedDocs)) setSelectedDocs(parsed.selectedDocs);
-    } catch {
-      // no-op
-    }
+      const s = JSON.parse(raw);
+      if (Array.isArray(s.messages)) setMessages(s.messages);
+      if (Array.isArray(s.selectedDocs)) setSelectedDocs(s.selectedDocs);
+      if (s.activeEvidence) setActiveEvidence(s.activeEvidence);
+    } catch {}
   }, []);
+
+  // Persist session
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ messages, selectedDocs, activeEvidence }));
+    } catch {}
+  }, [messages, selectedDocs, activeEvidence]);
 
   const refreshDocs = async () => {
     try {
@@ -549,145 +635,114 @@ function StudioPage() {
       const list = res.documents || [];
       setDocs(list);
       setSelectedDocs((prev) => prev.filter((id) => list.some((d) => d.id === id)));
-    } catch (e) {
-      console.error(e);
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || `Backend unreachable at ${API_BASE}`);
     }
   };
 
-  useEffect(() => {
-    refreshDocs();
-  }, []);
-
-  useEffect(() => () => {
-    streamTimersRef.current.forEach((id) => window.clearInterval(id));
-    streamTimersRef.current = [];
-  }, []);
-
-  useEffect(() => {
-    try {
-      sessionStorage.setItem(
-        STUDIO_STATE_KEY,
-        JSON.stringify({
-          docMessages,
-          questionDoc,
-          activeEvidence,
-          selectedDocs,
-        }),
-      );
-    } catch {
-      // no-op
-    }
-  }, [docMessages, questionDoc, activeEvidence, selectedDocs]);
+  useEffect(() => { refreshDocs(); }, []);
 
   useEffect(() => {
     if (!docs.some((d) => d.status === 'processing')) return;
-    const id = setInterval(() => { refreshDocs(); }, 2500);
+    const id = setInterval(refreshDocs, 2500);
     return () => clearInterval(id);
   }, [docs]);
 
-  useEffect(() => {
-    if (!answersAreaRef.current) return;
-    answersAreaRef.current.scrollTop = answersAreaRef.current.scrollHeight;
-  }, [docMessages, loadingDoc]);
+  useEffect(() => () => { streamTimers.current.forEach(clearInterval); }, []);
 
-  useEffect(() => {
-    if (!evidenceBodyRef.current) return;
-    evidenceBodyRef.current.scrollTop = 0;
-  }, [activeEvidence]);
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
 
   const dedupedDocs = useMemo(() => {
     const seen = new Set<string>();
-    const out: DocumentRow[] = [];
-    docs.forEach((d) => {
-      const key = (d.title || '').toLowerCase();
-      if (seen.has(key)) return;
-      seen.add(key);
-      out.push(d);
+    return docs.filter((d) => {
+      const k = d.title.toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k); return true;
     });
-    return out;
   }, [docs]);
 
-  const selectedDocumentRows = useMemo(
-    () => dedupedDocs.filter((d) => selectedDocs.includes(d.id)),
-    [dedupedDocs, selectedDocs],
-  );
-  const primarySelectedDocument = selectedDocumentRows[0] || null;
-  const fallbackDocument = dedupedDocs[0] || null;
-  const activeDocument = primarySelectedDocument || fallbackDocument;
-  const hasMultiSelection = selectedDocumentRows.length > 1;
-  const selectionSummary = hasMultiSelection
-    ? `${selectedDocumentRows.length} selected documents`
-    : activeDocument?.title || 'No document selected';
+  const selectedRows = useMemo(() => dedupedDocs.filter((d) => selectedDocs.includes(d.id)), [dedupedDocs, selectedDocs]);
+  const activeDoc = selectedRows[0] || dedupedDocs[0] || null;
+  const hasMulti = selectedRows.length > 1;
+  const processedCount = dedupedDocs.filter((d) => d.status === 'ready').length;
+  const processingCount = dedupedDocs.filter((d) => d.status === 'processing').length;
 
-  const summarizePrompt = hasMultiSelection
-    ? 'Summarize the selected uploaded documents. Organize the response by document, then provide combined takeaways.'
-    : 'Summarize the selected uploaded document.';
-  const keyPointsPrompt = hasMultiSelection
-    ? 'Extract the key skills, topics, or main points from each selected uploaded document. Keep the response separated by document.'
-    : 'What are the key skills or topics listed in the selected document?';
-  const evidencePrompt = hasMultiSelection
-    ? 'What evidence best supports the main claims in each selected uploaded document? Organize the answer by document.'
-    : 'What evidence best supports the main claims in this document?';
+  const handleFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setUploadStatus({ text: `Uploading ${files.length} file(s)…`, state: 'uploading' });
+    setUploadPct(0);
+    try {
+      for (let i = 0; i < files.length; i++) {
+        setUploadStatus({ text: `Uploading ${i + 1}/${files.length}: ${files[i].name}`, state: 'uploading' });
+        setUploadPct(Math.round(((i + 0.5) / files.length) * 100));
+        await api.uploadFile(files[i]);
+      }
+      setUploadPct(100);
+      setUploadStatus({
+        text: `${files.length === 1 ? files[0].name : `${files.length} files`} uploaded`,
+        state: 'done',
+      });
+      refreshDocs();
+      setTimeout(() => setUploadStatus({ text: '', state: 'idle' }), 3000);
+    } catch (e: any) {
+      setUploadStatus({ text: e?.message || 'Upload failed', state: 'err' });
+    }
+  };
 
-  const streamAssistantMessage = (
-    setter: Dispatch<SetStateAction<UiMessage[]>>,
+  const streamMessage = (
     fullText: string,
-    payload: Pick<UiMessage, 'citations' | 'confidence' | 'why_answer' | 'latency_breakdown_ms' | 'needs_clarification' | 'clarification' | 'answer_scope' | 'unsupported_claims' | 'query_ref' | 'faithfulness'>,
+    meta: Pick<UiMessage, 'citations' | 'confidence' | 'why_answer' | 'latency_breakdown_ms' | 'needs_clarification' | 'clarification' | 'answer_scope' | 'unsupported_claims' | 'query_ref' | 'faithfulness'>,
   ) => {
-    const finalText = fullText || 'No response received. Check backend/OpenAI key.';
-    setter((msgs) => [...msgs, { role: 'assistant', text: '', streaming: true, ...payload }]);
+    const text = fullText || 'No response received. Check backend/OpenAI key.';
+    setMessages((prev) => [...prev, { role: 'assistant', text: '', streaming: true, ...meta }]);
+    setActiveEvidence({ citations: meta.citations || [], trace: meta.why_answer?.top_chunks || [] });
 
     let idx = 0;
-    const step = Math.max(1, Math.floor(finalText.length / 80));
+    const step = Math.max(1, Math.ceil(text.length / 90));
     const timer = window.setInterval(() => {
-      idx += step;
-      const partial = finalText.slice(0, idx);
-      const done = idx >= finalText.length;
-      setter((msgs) => {
-        const next = [...msgs];
+      idx = Math.min(idx + step, text.length);
+      const done = idx >= text.length;
+      setMessages((prev) => {
+        const next = [...prev];
         for (let i = next.length - 1; i >= 0; i--) {
-          const m = next[i];
-          if (m.role === 'assistant' && m.streaming) {
-            next[i] = { ...m, role: 'assistant', text: partial, streaming: !done };
+          if (next[i].role === 'assistant' && next[i].streaming) {
+            next[i] = { ...next[i], text: text.slice(0, idx), streaming: !done };
             break;
           }
         }
         return next;
       });
       if (done) {
-        window.clearInterval(timer);
-        streamTimersRef.current = streamTimersRef.current.filter((t) => t !== timer);
+        clearInterval(timer);
+        streamTimers.current = streamTimers.current.filter((t) => t !== timer);
       }
-    }, 18);
-    streamTimersRef.current.push(timer);
-    setActiveEvidence({ citations: payload.citations || [], trace: payload.why_answer?.top_chunks || [] });
+    }, 14);
+    streamTimers.current.push(timer);
   };
 
-  const ask = async (text: string, k = 10, sense?: string, options?: { skipEnrichment?: boolean }) => {
+  const ask = async (text: string, skipEnrichment = false, sense?: string) => {
     const q = text.trim();
-    if (!q) return setErrorDoc('Please enter a question.');
-    setErrorDoc('');
-    setLoadingDoc(true);
-    setDocMessages((msgs) => [...msgs, { role: 'you', text: q }]);
-    setQuestionDoc('');
+    if (!q) return;
+    setError('');
+    setLoading(true);
+    setMessages((prev) => [...prev, { role: 'you', text: q }]);
+    setInput('');
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
     try {
       const hasUploads = Boolean(selectedDocs.length || docs.length);
-      const effectiveScope: 'uploaded' | 'public' = allowGeneralBackground ? 'public' : (hasUploads ? 'uploaded' : 'public');
-      const effectiveQuery = allowGeneralBackground && !options?.skipEnrichment ? enrichWithPreviousTopic(q, docMessages) : q;
+      const scope: 'uploaded' | 'public' = allowGeneralBackground ? 'public' : (hasUploads ? 'uploaded' : 'public');
+      const query = allowGeneralBackground && !skipEnrichment ? enrichQuery(q, messages) : q;
       const res = await api.askAssistant({
-        query: effectiveQuery,
-        scope: effectiveScope,
-        doc_id: effectiveScope === 'uploaded' && selectedDocs.length === 1 ? selectedDocs[0] : undefined,
-        doc_ids: effectiveScope === 'uploaded' && selectedDocs.length > 1 ? selectedDocs : undefined,
-        k,
-        sense,
-        compare_senses: compareSenses,
+        query, scope, sense,
+        doc_id: scope === 'uploaded' && selectedDocs.length === 1 ? selectedDocs[0] : undefined,
+        doc_ids: scope === 'uploaded' && selectedDocs.length > 1 ? selectedDocs : undefined,
+        k: 10,
         allow_general_background: allowGeneralBackground,
-        run_judge: runJudge,
         run_judge_llm: true,
       });
-      streamAssistantMessage(setDocMessages, (res.answer || res.clarification?.question || '').trim(), {
+      streamMessage((res.answer || res.clarification?.question || '').trim(), {
         citations: res.citations || [],
         confidence: res.confidence,
         why_answer: res.why_answer,
@@ -697,19 +752,18 @@ function StudioPage() {
         answer_scope: res.answer_scope,
         unsupported_claims: res.unsupported_claims,
         faithfulness: res.faithfulness,
-        query_ref: effectiveQuery,
+        query_ref: query,
       });
     } catch (e: any) {
-      setErrorDoc(e?.message || 'Search failed');
-      streamAssistantMessage(setDocMessages, 'No response received. Check backend/OpenAI key.', { citations: [] });
+      setError(e?.message || 'Request failed');
+      streamMessage(e?.message || `Backend unreachable at ${API_BASE}`, { citations: [] });
     } finally {
-      setLoadingDoc(false);
+      setLoading(false);
     }
   };
 
-  const toggleSelectedDoc = (id: number) => {
-    setSelectedDocs((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  };
+  const toggleDoc = (id: number) =>
+    setSelectedDocs((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
 
   const confirmDelete = async () => {
     if (!pendingDelete) return;
@@ -717,292 +771,362 @@ function StudioPage() {
       await api.deleteDoc(pendingDelete.id);
       setSelectedDocs((prev) => prev.filter((id) => id !== pendingDelete.id));
       setActiveEvidence({ citations: [], trace: [] });
-      setPendingDelete(null);
-      refreshDocs();
-    } catch (e) {
-      console.error(e);
-      setPendingDelete(null);
-    }
+    } catch {}
+    setPendingDelete(null);
+    refreshDocs();
   };
 
+  const quickAsk = (prompt: string) => ask(prompt, true);
+
+  const EMPTY_CARDS = [
+    {
+      icon: '📋',
+      text: hasMulti ? 'Summarize all selected documents' : 'Summarize this document',
+      prompt: hasMulti
+        ? 'Summarize the selected uploaded documents. Organize by document and provide combined takeaways.'
+        : 'Summarize the selected uploaded document.',
+    },
+    {
+      icon: '🔑',
+      text: 'Extract key concepts',
+      prompt: hasMulti
+        ? 'Extract key skills, topics, and main points from each selected document.'
+        : 'What are the key skills or topics in this document?',
+    },
+    {
+      icon: '🔍',
+      text: 'Find supporting evidence',
+      prompt: hasMulti
+        ? 'What evidence best supports the main claims across these documents?'
+        : 'What evidence best supports the main claims in this document?',
+    },
+    {
+      icon: '🔬',
+      text: 'Describe the methodology',
+      prompt: 'Describe the methodology, approach, and experimental setup used in this research.',
+    },
+  ];
+
   return (
-    <div className="anara-shell">
-      <aside className="anara-sidebar">
-        <div className="anara-sidebar-top">
-          <div className="workspace-header">
-            <div className="workspace-account">
-              <div className="workspace-avatar">SR</div>
-              <div className="workspace-meta">
-                <strong>ScholarRAG</strong>
-                <span>Sushil workspace</span>
-              </div>
-            </div>
-            <div className="workspace-toolbar">
-              <button className="toolbar-icon" type="button" aria-label="Search workspace">⌕</button>
-              <button className="toolbar-icon" type="button" aria-label="Create new">+</button>
-            </div>
-          </div>
-
-          <nav className="anara-nav">
-            <button className={`anara-nav-item ${activeView === 'home' ? 'active' : ''}`} onClick={() => setActiveView('home')}><span>⌂</span><span>Home</span></button>
-            <button className={`anara-nav-item ${activeView === 'library' ? 'active' : ''}`} onClick={() => setActiveView('library')}><span>▤</span><span>Library</span></button>
-            <button className={`anara-nav-item ${activeView === 'agent' ? 'active' : ''}`} onClick={() => setActiveView('agent')}><span>◌</span><span>Agent</span></button>
-          </nav>
-
-          <div className="anara-sidebar-section">
-            <div className="sidebar-eyebrow">Private</div>
-            <div className="project-card compact">
-              <div className="project-card-title">Workspace files</div>
-              <div className="project-card-sub">{dedupedDocs.length} indexed</div>
-            </div>
-          </div>
-
-          <div className="anara-sidebar-section">
-            <div className="section-heading-row">
-              <h3>Upload</h3>
-              <span className="mini-note">PDF ingestion</span>
-            </div>
-            <UploadPanel onUploaded={refreshDocs} />
-          </div>
-
-          <div className="anara-sidebar-section sidebar-library">
-            <div className="section-heading-row">
-              <h3>Library</h3>
-              <span className="mini-note">{selectedDocs.length ? `${selectedDocs.length} selected` : 'Select files'}</span>
-            </div>
-            <LatestDocumentsList
-              documents={dedupedDocs}
-              selectedIds={selectedDocs}
-              onToggle={toggleSelectedDoc}
-              onDelete={(id) => setPendingDelete(dedupedDocs.find((d) => d.id === id) || null)}
-            />
+    <div className="app-shell">
+      {/* ── Sidebar ── */}
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <div className="brand-icon">🎓</div>
+          <div className="brand-text">
+            <div className="brand-name">ScholarRAG</div>
+            <div className="brand-sub">Research assistant</div>
           </div>
         </div>
 
-        <div className="sidebar-footer-actions">
-          <button
-            className="ghost usage-link"
-            onClick={() => {
-              window.history.pushState({}, '', '/eval');
-              window.dispatchEvent(new PopStateEvent('popstate'));
-            }}
-          >
-            Open evaluation
+        <div className="sidebar-body">
+          <div className="sidebar-section">
+            <div className="sidebar-label">
+              <span>Workspace</span>
+              <span>
+                {processedCount} ready{processingCount ? ` · ${processingCount} processing` : ''}
+              </span>
+            </div>
+          </div>
+
+          {/* Upload zone */}
+          <div className="sidebar-section">
+            <div className="sidebar-label"><span>Upload</span><span>PDF / TXT</span></div>
+            <div
+              className={`upload-zone${dragActive ? ' drag-active' : ''}`}
+              onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+              onDragLeave={() => setDragActive(false)}
+              onDrop={(e) => { e.preventDefault(); setDragActive(false); handleFiles(e.dataTransfer.files); }}
+              onClick={() => document.getElementById('sr-upload')?.click()}
+            >
+              <div className="upload-icon">📄</div>
+              <div className="upload-text">Drop files or <strong>browse</strong></div>
+              <input
+                id="sr-upload"
+                type="file"
+                accept=".pdf,.txt,.md"
+                multiple
+                style={{ display: 'none' }}
+                onChange={(e) => handleFiles(e.target.files)}
+              />
+            </div>
+            {uploadStatus.state !== 'idle' && (
+              <div className={`upload-status ${uploadStatus.state}`}>
+                {uploadStatus.state === 'uploading' && (
+                  <span style={{
+                    display: 'inline-block', width: 10, height: 10, borderRadius: '50%',
+                    border: '1.5px solid var(--cyan)', borderTopColor: 'transparent',
+                    animation: 'spin 0.7s linear infinite',
+                  }} />
+                )}
+                {uploadStatus.state === 'done' && '✓'}
+                {uploadStatus.state === 'err' && '✕'}
+                {uploadStatus.text}
+              </div>
+            )}
+            {uploadStatus.state === 'uploading' && (
+              <div className="upload-bar">
+                <div className="upload-bar-fill" style={{ width: `${uploadPct}%` }} />
+              </div>
+            )}
+          </div>
+
+          {/* Documents */}
+          <div className="sidebar-section">
+            <div className="sidebar-label">
+              <span>Documents</span>
+              {selectedDocs.length > 0 && (
+                <span style={{ color: 'var(--indigo)' }}>{selectedDocs.length} selected</span>
+              )}
+            </div>
+            {dedupedDocs.length === 0 ? (
+              <div className="doc-empty">
+                <div className="doc-empty-icon">📂</div>
+                <div>No documents yet.<br />Upload a PDF to begin.</div>
+              </div>
+            ) : (
+              <div className="doc-list">
+                {dedupedDocs.map((d) => {
+                  const sel = selectedDocs.includes(d.id);
+                  const badgeCls = d.status === 'ready' ? 'ready' : d.status === 'error' ? 'error' : 'processing';
+                  const badgeText = d.status === 'ready' ? 'Ready' : d.status === 'error' ? 'Error' : 'Processing…';
+                  return (
+                    <div
+                      key={d.id}
+                      className={`doc-item${sel ? ' selected' : ''}`}
+                      onClick={() => toggleDoc(d.id)}
+                    >
+                      <div className="doc-check">{sel ? '✓' : ''}</div>
+                      <div className="doc-icon">📝</div>
+                      <div className="doc-info">
+                        <div className="doc-name" title={d.title}>{d.title}</div>
+                        <div className="doc-status-row">
+                          <span className={`doc-badge ${badgeCls}`}>{badgeText}</span>
+                        </div>
+                      </div>
+                      <button
+                        className="doc-del"
+                        title="Delete document"
+                        onClick={(e) => { e.stopPropagation(); setPendingDelete(d); }}
+                      >✕</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="sidebar-footer">
+          <button className="sidebar-footer-btn" onClick={onNavigateEval}>
+            <span className="sidebar-footer-btn-icon">⚗</span>
+            Evaluation Studio
           </button>
         </div>
       </aside>
 
-      <main className="anara-main">
-        <header className="anara-topbar">
-          <div className="topbar-title">
-            <h1>{activeView === 'home' ? 'Chat with your research' : activeView === 'library' ? 'Library' : 'Agent'}</h1>
-            <p>
-              {activeView === 'home'
-                ? (
-                  hasMultiSelection
-                    ? `Working across ${selectedDocumentRows.length} selected documents`
-                    : (activeDocument ? `Working inside ${activeDocument.title}` : 'Select one or more processed files and ask grounded questions.')
-                )
-                : activeView === 'library'
-                  ? 'Browse, select, and remove uploaded documents.'
-                  : 'Run quick document workflows over the current file.'}
-            </p>
-          </div>
-          <div className="topbar-actions">
-            {activeView === 'home' ? (
-              <>
-                <div className="scope-toggle">
-                  <button className={!allowGeneralBackground ? 'active' : ''} onClick={() => setAllowGeneralBackground(false)}>Docs only</button>
-                  <button className={allowGeneralBackground ? 'active' : ''} onClick={() => setAllowGeneralBackground(true)}>Allow background</button>
-                </div>
-                <label className="toggle-chip">
-                  <input type="checkbox" checked={runJudge} onChange={(e) => setRunJudge(e.target.checked)} />
-                  <span>Judge</span>
-                </label>
-              </>
-            ) : null}
-          </div>
-        </header>
-
-        <div className="anara-main-inner">
-          {activeView === 'home' ? <div className="studio-grid">
-            <section className="conversation-card">
-              <div className="conversation-toolbar master">
-                <div>
-                  <div className="toolbar-title">{hasMultiSelection ? 'Chat across files' : 'Chat with file'}</div>
-                  <div className="toolbar-subtitle">
-                    {hasMultiSelection
-                      ? `Using ${selectedDocumentRows.length} selected uploaded documents`
-                      : (activeDocument ? `Focused on ${activeDocument.title}` : 'Using your latest processed uploaded document')}
-                  </div>
-                </div>
-                <div className="conversation-controls">
-                  <div className="workspace-mini-actions">
-                    <button className="mini-action" type="button" onClick={() => ask(summarizePrompt, 10, undefined, { skipEnrichment: true })}>Summarize {hasMultiSelection ? 'files' : 'file'}</button>
-                    <button className="mini-action" type="button" onClick={() => ask(keyPointsPrompt, 10, undefined, { skipEnrichment: true })}>Extract key points</button>
-                    <button className="mini-action" type="button" onClick={() => ask(evidencePrompt, 10, undefined, { skipEnrichment: true })}>Inspect evidence</button>
-                  </div>
-                  <label className="toggle-chip">
-                    <input type="checkbox" checked={compareSenses} onChange={(e) => setCompareSenses(e.target.checked)} />
-                    <span>Compare senses</span>
-                  </label>
-                </div>
-              </div>
-
-              <div className="answers-area conversation-stream" ref={answersAreaRef}>
-                {errorDoc && <div className="alert">{errorDoc}</div>}
-                {docMessages.length === 0 && !loadingDoc && (
-                  <div className="empty-state workspace-empty">
-                    <div className="empty-icon" />
-                    <div>
-                      <h3>Start with a document question</h3>
-                      <p>{hasMultiSelection ? 'Try a cross-document summary, comparison, or evidence request.' : 'Try asking for a summary, skills extraction, methods section, or key findings.'}</p>
-                    </div>
-                  </div>
-                )}
-
-                {docMessages.map((m, i) => (
-                  <div key={i} className={`message-group ${m.role}`}>
-                    <div className={`chat-bubble-row ${m.role}`}>
-                      <div
-                        className="chat-bubble"
-                        onClick={() => {
-                          if (m.role === 'assistant') {
-                            setActiveEvidence({ citations: m.citations || [], trace: m.why_answer?.top_chunks || [] });
-                          }
-                        }}
-                      >
-                        {renderWithInlineCitations(m.text)}
-                        {m.streaming && <span className="stream-cursor">▋</span>}
-                      </div>
-                    </div>
-                    {m.role === 'assistant' && !m.streaming && (
-                      <>
-                        <div className="assistant-meta-row">
-                          <ConfidenceBadge confidence={m.confidence} />
-                          {m.answer_scope ? <div className="latency-chip">Scope: {m.answer_scope}</div> : null}
-                          {m.faithfulness ? (
-                            <div className="latency-chip">
-                              Faithfulness: {Math.round((m.faithfulness.overall_score || 0) * 100)}%
-                            </div>
-                          ) : null}
-                        </div>
-                        {m.needs_clarification && m.clarification?.options?.length ? (
-                          <div className="clarify-box">
-                            <div className="clarify-q">{m.clarification.question}</div>
-                            <div className="clarify-options">
-                              {m.clarification.options.map((opt) => (
-                                <button key={opt} className="clarify-chip" onClick={() => ask(m.query_ref || '', 10, opt)}>
-                                  {opt}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        ) : null}
-                      </>
-                    )}
-                  </div>
-                ))}
-
-                {loadingDoc && (
-                  <div className="empty-state workspace-empty">
-                    <div className="empty-icon" />
-                    <div>
-                      <h3>Retrieving evidence</h3>
-                      <p>{allowGeneralBackground ? 'Blending public research context with your workspace.' : 'Searching your uploaded documents only.'}</p>
-                    </div>
-                  </div>
-                )}
-                <div className="chat-spacer" />
-              </div>
-
-              <div className="composer conversation-composer">
-                <SearchBar
-                  value={questionDoc}
-                  onChange={setQuestionDoc}
-                  onSubmit={() => ask(questionDoc, 10)}
-                  disabled={loadingDoc}
-                  loading={loadingDoc}
-                  onAdvanced={() => ask(questionDoc, 8)}
-                  inputRef={askDocRef}
-                  placeholder="Ask about your file, paper, or uploaded evidence..."
-                  hideAdvanced
-                />
-              </div>
-            </section>
-
-            <aside className="evidence-column">
-              <div className="evidence-card">
-                <div className="evidence-headline">
-                  <div>
-                    <div className="toolbar-title">Evidence</div>
-                    <div className="toolbar-subtitle">Inspect retrieved snippets, confidence, and answer support.</div>
-                  </div>
-                </div>
-                <div className="assistant-body evidence-body" ref={evidenceBodyRef}>
-                  {activeEvidence.citations.length === 0 && activeEvidence.trace.length === 0 ? (
-                    <div className="empty-state workspace-empty">
-                      <div className="empty-icon" />
-                      <div>
-                        <h3>No evidence selected</h3>
-                        <p>Click any assistant answer to pin its sources here.</p>
-                      </div>
-                    </div>
-                  ) : (
-                    <SourcesPanel citations={activeEvidence.citations} traceChunks={activeEvidence.trace} />
-                  )}
-                </div>
-                <div className="evidence-foot-note">
-                  Confidence reflects retrieval quality and support coverage. Hover badges for detailed factors.
-                </div>
-              </div>
-            </aside>
-          </div> : null}
-
-          {activeView === 'library' ? (
-            <div className="single-pane">
-              <div className="single-pane-card">
-                <div className="toolbar-title">Document library</div>
-                <div className="toolbar-subtitle">Select one or more files to query together, or remove them from the workspace.</div>
-                <LatestDocumentsList
-                  documents={dedupedDocs}
-                  selectedIds={selectedDocs}
-                  onToggle={toggleSelectedDoc}
-                  onDelete={(id) => setPendingDelete(dedupedDocs.find((d) => d.id === id) || null)}
-                />
-              </div>
+      {/* ── Main content ── */}
+      <div className="main-content">
+        <div className="topbar">
+          <div className="topbar-left">
+            <div className="topbar-title">
+              {hasMulti
+                ? `${selectedRows.length} documents selected`
+                : (activeDoc ? activeDoc.title : 'Chat with your research')}
             </div>
-          ) : null}
-
-          {activeView === 'agent' ? (
-            <div className="single-pane">
-              <div className="single-pane-card">
-                <div className="toolbar-title">Agent actions</div>
-                <div className="toolbar-subtitle">Run fast workflows over the selected document.</div>
-                <div className="agent-actions">
-                  <button className="agent-card" type="button" onClick={() => ask('Summarize the selected uploaded document with citations.', 10)}>
-                    <strong>Summarize</strong>
-                    <span>Generate a concise grounded summary.</span>
-                  </button>
-                  <button className="agent-card" type="button" onClick={() => ask('What are the key skills or concepts in the selected document?', 10)}>
-                    <strong>Extract</strong>
-                    <span>Pull out important skills, entities, or ideas.</span>
-                  </button>
-                  <button className="agent-card" type="button" onClick={() => ask('What evidence best supports the main claims in the selected document?', 10)}>
-                    <strong>Verify</strong>
-                    <span>Surface the strongest supporting evidence.</span>
-                  </button>
-                </div>
-              </div>
+            <div className="topbar-sub">
+              {hasMulti
+                ? 'Cross-document analysis mode'
+                : (activeDoc ? 'Grounded research assistant' : 'Upload a document to get started')}
             </div>
-          ) : null}
+          </div>
+          <div className="topbar-right">
+            <div className="seg-toggle">
+              <button
+                className={!allowGeneralBackground ? 'active' : ''}
+                onClick={() => setAllowGeneralBackground(false)}
+              >Docs only</button>
+              <button
+                className={allowGeneralBackground ? 'active' : ''}
+                onClick={() => setAllowGeneralBackground(true)}
+              >Public research</button>
+            </div>
+          </div>
         </div>
-      </main>
-      <DeleteDocumentModal document={pendingDelete} onCancel={() => setPendingDelete(null)} onConfirm={confirmDelete} />
+
+        {/* Chat stream */}
+        <div className="chat-stream">
+          <div className="chat-inner">
+            {messages.length === 0 && !loading && (
+              <div className="chat-empty">
+                <div className="chat-empty-logo">🎓</div>
+                <div className="chat-empty-title">Ask anything about your research</div>
+                <div className="chat-empty-sub">
+                  {activeDoc
+                    ? `Currently focused on "${activeDoc.title}". Ask questions, request summaries, or explore key findings.`
+                    : 'Upload a PDF to start a grounded conversation, or enable Public Research to search scholarly databases.'}
+                </div>
+                {activeDoc && (
+                  <div className="empty-grid">
+                    {EMPTY_CARDS.map((card) => (
+                      <button key={card.text} className="empty-card" onClick={() => quickAsk(card.prompt)}>
+                        <div className="empty-card-icon">{card.icon}</div>
+                        <div className="empty-card-text">{card.text}</div>
+                        <div className="empty-card-cta">Ask this →</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {error && <div className="alert" style={{ marginBottom: 12 }}>{error}</div>}
+
+            {messages.map((m, i) => (
+              <div key={i} className="msg-group">
+                <div className={`bubble-row ${m.role}`}>
+                  {m.role === 'assistant' && <div className="msg-avatar assistant">SR</div>}
+                  <div
+                    className={`msg-bubble${m.role === 'assistant' && activeEvidenceMsgIdx === i ? ' active-evidence' : ''}`}
+                    onClick={() => {
+                      if (m.role === 'assistant') {
+                        setActiveEvidence({ citations: m.citations || [], trace: m.why_answer?.top_chunks || [] });
+                        setActiveEvidenceMsgIdx(i);
+                      }
+                    }}
+                  >
+                    {m.role === 'assistant' ? renderMarkdown(m.text) : <div className="md"><p>{m.text}</p></div>}
+                    {m.streaming && <span className="stream-cursor" />}
+                  </div>
+                </div>
+
+                {m.role === 'assistant' && !m.streaming && (
+                  <>
+                    <div className="msg-meta">
+                      <ConfBadge confidence={m.confidence} />
+                      {m.answer_scope && <span className="meta-chip">Scope: {m.answer_scope}</span>}
+                      {m.faithfulness && (
+                        <span className="meta-chip">
+                          Faithfulness: {Math.round((m.faithfulness.overall_score || 0) * 100)}%
+                        </span>
+                      )}
+                    </div>
+                    {m.needs_clarification && m.clarification?.options?.length ? (
+                      <div className="clarify-box">
+                        <div className="clarify-q">{m.clarification.question}</div>
+                        <div className="clarify-opts">
+                          {m.clarification.options.map((opt) => (
+                            <button
+                              key={opt}
+                              className="clarify-opt"
+                              onClick={() => ask(m.query_ref || '', true, opt)}
+                            >
+                              {opt}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            ))}
+
+            {loading && <TypingIndicator />}
+            <div ref={chatEndRef} />
+          </div>
+
+          {/* Quick chips */}
+          {messages.length > 0 && !loading && activeDoc && (
+            <div className="quick-actions">
+              {[
+                { label: '📋 Summarize', prompt: hasMulti ? 'Summarize the selected uploaded documents.' : 'Summarize the selected uploaded document.' },
+                { label: '🔑 Key points', prompt: 'What are the key points and main contributions?' },
+                { label: '🔍 Evidence', prompt: 'What evidence best supports the main claims?' },
+              ].map((c) => (
+                <button key={c.label} className="quick-chip" onClick={() => quickAsk(c.prompt)}>
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Composer */}
+        <div className="composer-wrap">
+          <div className="composer-inner">
+            <div className="composer-box">
+              <textarea
+                ref={textareaRef}
+                className="composer-input"
+                rows={1}
+                value={input}
+                placeholder={
+                  allowGeneralBackground
+                    ? 'Search public research or ask about your documents…'
+                    : 'Ask about your uploaded documents…'
+                }
+                disabled={loading}
+                onChange={(e) => setInput(e.target.value)}
+                onInput={(e) => {
+                  const el = e.currentTarget;
+                  el.style.height = 'auto';
+                  el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    ask(input);
+                  }
+                }}
+              />
+              <button
+                className={`composer-send${loading ? ' thinking' : ''}`}
+                disabled={loading || !input.trim()}
+                onClick={() => ask(input)}
+                title="Send (Enter)"
+              >
+                {!loading && '↑'}
+              </button>
+            </div>
+            <div className="composer-hint">Enter to send · Shift+Enter for newline</div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Evidence panel ── */}
+      <EvidencePanel
+        citations={activeEvidence.citations}
+        traceChunks={activeEvidence.trace}
+        loading={loading}
+        allowGeneralBackground={allowGeneralBackground}
+      />
+
+      <DeleteModal
+        doc={pendingDelete}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }
 
+// ── Root with routing ─────────────────────────────────────────────────────────
 export default function App() {
-  return <StudioPage />;
+  const [page, setPage] = useState<Page>(() =>
+    window.location.pathname.startsWith('/eval') ? 'eval' : 'studio',
+  );
+
+  useEffect(() => {
+    const handler = () =>
+      setPage(window.location.pathname.startsWith('/eval') ? 'eval' : 'studio');
+    window.addEventListener('popstate', handler);
+    return () => window.removeEventListener('popstate', handler);
+  }, []);
+
+  const goEval = () => { window.history.pushState({}, '', '/eval'); setPage('eval'); };
+  const goStudio = () => { window.history.pushState({}, '', '/'); setPage('studio'); };
+
+  if (page === 'eval') return <EvalPage onBack={goStudio} />;
+  return <StudioPage onNavigateEval={goEval} />;
 }

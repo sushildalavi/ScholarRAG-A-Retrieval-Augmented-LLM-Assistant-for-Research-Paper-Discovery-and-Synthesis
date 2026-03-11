@@ -19,6 +19,9 @@ venv/
 .cache/
 logs/
 data/cache/
+data/scholar_index.faiss
+data/metadata.json
+data/user_indices/
 storage/
 *.log
 *.db

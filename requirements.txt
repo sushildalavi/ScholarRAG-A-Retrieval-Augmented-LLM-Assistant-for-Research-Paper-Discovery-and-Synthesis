@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+pgvector
+python-dotenv
+requests
+openai
+pydantic
+PyPDF2
+python-multipart
+numpy
+google-auth

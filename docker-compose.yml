@@ -1,6 +1,35 @@
 version: "3.9"
 
 services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: scholarrag_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://scholarrag:scholarrag@db:5432/scholarrag_db}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      RESEARCH_CHAT_MODEL: ${RESEARCH_CHAT_MODEL:-gpt-4o-mini}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-mxbai-embed-large}
+      EMBEDDING_QUERY_PREFIX: ${EMBEDDING_QUERY_PREFIX:-Represent this sentence for searching relevant passages:}
+      EMBEDDING_DOC_PREFIX: ${EMBEDDING_DOC_PREFIX:-Represent this document for retrieval:}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-16}
+      EMBEDDING_TIMEOUT_SECONDS: ${EMBEDDING_TIMEOUT_SECONDS:-45}
+      EMBEDDING_RETRY_ATTEMPTS: ${EMBEDDING_RETRY_ATTEMPTS:-3}
+      EMBEDDING_RETRY_DELAY: ${EMBEDDING_RETRY_DELAY:-0.75}
+      EMBEDDING_VERSION: ${EMBEDDING_VERSION:-mxbai-embed-large-v1}
+      EMBEDDING_RAW_DIM: ${EMBEDDING_RAW_DIM:-1024}
+      VECTOR_STORE_DIM: ${VECTOR_STORE_DIM:-1536}
+      STORAGE_DIR: ${STORAGE_DIR:-storage}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    profiles: ["backend"]
+
   db:
     image: pgvector/pgvector:pg16
     container_name: scholarrag_db

@@ -28,7 +28,7 @@ def embedding_model_version() -> str:
 
 
 def embed_query(text: str) -> np.ndarray:
-    vec = np.array([emb_service.get_embedding(text)], dtype=np.float32)
+    vec = np.array([emb_service.embed_query(text)], dtype=np.float32)
     return _norm(vec)
 
 
@@ -46,7 +46,7 @@ def embed_batch_cached(items: list[tuple[str, str]]) -> dict[str, np.ndarray]:
     if not texts:
         return out
 
-    vecs = emb_service.get_embeddings(texts)
+    vecs = emb_service.embed_documents(texts)
     for i, vec in zip(ids, vecs):
         arr = np.array([vec], dtype=np.float32)
         out[i] = _norm(arr)
