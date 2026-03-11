@@ -411,6 +411,19 @@ def assistant_answer(
             "retrieval_policy": {"mode": "chat-bypass", "uploaded_hits": 0, "public_hits": 0, "uploaded_strength": 0.0, "uploaded_overlap": 0.0, "used_public_fallback": False},
         }
 
+    if scope == "uploaded" and not doc_id and not doc_ids and not allow_general_background:
+        if not _is_doc_intent_query(qnorm) and not doc_summary_intent and not related_work_intent:
+            return {
+                "answer": (
+                    "No uploaded document is selected. Select one or more documents for document-grounded answers, "
+                    "or switch to Public research for general questions."
+                ),
+                "citations": [],
+                "why_answer": {"rerank_changed_order": False, "top_chunks": []},
+                "latency_breakdown_ms": {"retrieve": 0.0, "rerank": 0.0, "generate": 0.0, "total": int((time.time() - started) * 1000)},
+                "retrieval_policy": {"mode": "selection-required", "uploaded_hits": 0, "public_hits": 0, "uploaded_strength": 0.0, "uploaded_overlap": 0.0, "used_public_fallback": False},
+            }
+
     retrieval_ms = 0.0
     rerank_ms = 0.0
     generate_ms = 0.0
@@ -568,7 +581,7 @@ def assistant_answer(
                 or (uploaded_hits < 3 and uploaded_strength < 0.52)
             )
         )
-        if weak_uploaded and allow_general_background and not explicit_uploaded_summary:
+        if weak_uploaded and allow_general_background and not explicit_uploaded_summary and answer_mode in {"research_synthesis", "source_listing"}:
             used_public_fallback = True
             public_citations = fetch_context(query, "public")
             public_citations = _prune_public_citations(query, public_citations)
@@ -948,7 +961,15 @@ def assistant_answer(
     citations = _apply_usage_boost(citations, answer)
     msa_by_citation: dict[int, dict] = {}
     unsupported_by_msa = 0
-    if citations and (answer or "").strip():
+    should_compute_msa = (
+        bool(citations)
+        and bool((answer or "").strip())
+        and (
+            answer_mode == "research_synthesis"
+            or run_judge
+        )
+    )
+    if should_compute_msa:
         msa_by_citation, unsupported_by_msa = _compute_citation_msa(
             query,
             answer,

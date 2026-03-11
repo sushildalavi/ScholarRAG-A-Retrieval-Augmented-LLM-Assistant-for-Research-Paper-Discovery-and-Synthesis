@@ -2,6 +2,8 @@ import numpy as np
 import os
 import re
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils.embedding_utils import embed_query, embed_batch_cached
 from utils.openalex_utils import fetch_candidates_from_openalex
@@ -22,6 +24,9 @@ IEEE_LIMIT = int(os.getenv("PUBLIC_IEEE_LIMIT", "10")) or 10
 PUBLIC_SPARSE_WEIGHT = float(os.getenv("PUBLIC_SPARSE_WEIGHT", "0.25"))
 logger = logging.getLogger(__name__)
 _DISABLED_PROVIDERS: set[str] = set()
+_PUBLIC_SEARCH_CACHE: dict[tuple[str, str, int], tuple[float, dict]] = {}
+PUBLIC_SEARCH_CACHE_TTL_SECONDS = int(os.getenv("PUBLIC_SEARCH_CACHE_TTL_SECONDS", "300")) or 300
+PUBLIC_PROVIDER_MAX_WORKERS = int(os.getenv("PUBLIC_PROVIDER_MAX_WORKERS", "4")) or 4
 
 
 def _normalize_public_query(query: str) -> str:
@@ -101,7 +106,7 @@ def _sparse_overlap_score(query: str, text: str) -> float:
 
 def _fetch_provider(provider: str, query: str, limit: int) -> list[dict]:
     if provider in _DISABLED_PROVIDERS:
-        return {"results": [], "provider_status": {}} if return_metadata else []
+        return []
     if provider == "openalex" and OPENALEX_LIMIT > 0:
         return fetch_candidates_from_openalex(query, limit=min(limit, OPENALEX_LIMIT))
     if provider == "arxiv" and ARXIV_LIMIT > 0:
@@ -132,6 +137,17 @@ def public_live_search(query: str, k: int = 8, source_only: str | None = None, r
     query_variants = _query_variants(query)
     if not query_variants:
         return {"results": [], "provider_status": {}} if return_metadata else []
+    primary_query = query_variants[0]
+    cache_key = (primary_query, provider, int(k))
+    cached = _PUBLIC_SEARCH_CACHE.get(cache_key)
+    if cached and (time.time() - cached[0] <= PUBLIC_SEARCH_CACHE_TTL_SECONDS):
+        payload = cached[1]
+        if return_metadata:
+            return {
+                "results": list(payload.get("results", [])),
+                "provider_status": dict(payload.get("provider_status", {})),
+            }
+        return list(payload.get("results", []))
 
     candidates = []
     provider_status: dict[str, dict] = {}
@@ -144,11 +160,20 @@ def public_live_search(query: str, k: int = 8, source_only: str | None = None, r
                 break
     else:
         providers = ("openalex", "arxiv", "crossref", "semanticscholar", "springer", "elsevier", "ieee")
-        primary_query = query_variants[0]
-        for p in providers:
-            rows = _fetch_provider(p, primary_query, limit=max(k * 2, 10))
-            provider_status[p] = {"queried": True, "variant": primary_query, "fetched": len(rows)}
-            candidates += rows
+        limit = max(k * 2, 10)
+        with ThreadPoolExecutor(max_workers=min(PUBLIC_PROVIDER_MAX_WORKERS, len(providers))) as executor:
+            future_map = {
+                executor.submit(_fetch_provider, p, primary_query, limit): p
+                for p in providers
+            }
+            for future in as_completed(future_map):
+                p = future_map[future]
+                try:
+                    rows = future.result() or []
+                except Exception:
+                    rows = []
+                provider_status[p] = {"queried": True, "variant": primary_query, "fetched": len(rows)}
+                candidates += rows
 
     # dedupe by DOI/id/title
     seen = set()
@@ -204,6 +229,10 @@ def public_live_search(query: str, k: int = 8, source_only: str | None = None, r
         "public_search provider status query=%r status=%s",
         query_variants[0] if query_variants else query,
         provider_status,
+    )
+    _PUBLIC_SEARCH_CACHE[cache_key] = (
+        time.time(),
+        {"results": list(final_results), "provider_status": dict(provider_status)},
     )
     if return_metadata:
         return {"results": final_results, "provider_status": provider_status}

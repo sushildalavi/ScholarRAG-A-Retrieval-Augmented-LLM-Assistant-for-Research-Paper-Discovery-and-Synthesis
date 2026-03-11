@@ -938,9 +938,6 @@ def _resolve_effective_doc_id(doc_id: int | None, scope: str, query: str) -> int
         title = (r.get("title") or "").lower()
         if title and (title in q or Path(title).stem in q):
             return r.get("id")
-
-    if _is_doc_intent_query(q) or _is_uploaded_doc_summary_query(q):
-        return rows[0].get("id")
     return None
 
 

@@ -37,9 +37,29 @@ type SourceRow = {
   url?: string;
   source?: string;
   page?: number;
+  pages?: number[];
   cited?: boolean;
+  citation_count?: number;
+  excerpt_count?: number;
   snippet_preview?: string;
   confidence_obj?: ConfidenceObject;
+};
+
+type EvidenceState = {
+  citations: Citation[];
+  trace: WhyTraceChunk[];
+};
+
+type StudioSession = {
+  id: string;
+  title: string;
+  messages: UiMessage[];
+  selectedDocs: number[];
+  activeEvidence: EvidenceState;
+  activeEvidenceMsgIdx: number;
+  allowGeneralBackground: boolean;
+  createdAt: number;
+  updatedAt: number;
 };
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────
@@ -140,6 +160,24 @@ function ConfBadge({ confidence }: { confidence?: ConfidenceObject }) {
   );
 }
 
+function formatAnswerScope(scope?: string): string | null {
+  if (!scope) return null;
+  const normalized = scope.trim().toLowerCase();
+  const explicit: Record<string, string> = {
+    official_document_context: 'Official document',
+    uploaded_document_context: 'Uploaded document',
+    personal_document_context: 'Personal document',
+    public_research_context: 'Public research',
+    mixed_research_context: 'Mixed research',
+    context_limited: 'Context limited',
+  };
+  if (explicit[normalized]) return explicit[normalized];
+  return normalized
+    .replace(/_context$/, '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 // ── Source card ───────────────────────────────────────────────────────────────
 function SourceCard({ row, idx, onClick }: { row: SourceRow; idx: number; onClick: () => void }) {
   const msaScore = row.msa?.msa_score;
@@ -150,6 +188,13 @@ function SourceCard({ row, idx, onClick }: { row: SourceRow; idx: number; onClic
     ? (row.msa_supported ? 'high' : 'low')
     : (row.confidence_obj?.label?.toLowerCase() || 'default');
   const confCls = ['high', 'med', 'low'].includes(rawLabel) ? rawLabel : 'default';
+  const pages = (row.pages || []).filter((p): p is number => typeof p === 'number');
+  const pageLabel =
+    pages.length > 1
+      ? `pp.${pages.slice(0, 4).join(', ')}${pages.length > 4 ? '…' : ''}`
+      : typeof row.page === 'number'
+        ? `p.${row.page}`
+        : null;
 
   return (
     <button
@@ -157,19 +202,21 @@ function SourceCard({ row, idx, onClick }: { row: SourceRow; idx: number; onClic
       onClick={onClick}
       style={{ animationDelay: `${idx * 40}ms` }}
     >
+      <div className="sc-overline">
+        <span className="sc-source-tag">S{row.id}</span>
+        <span className="sc-meta-tag">{String(row.source || 'source')}</span>
+        {pageLabel && <span className="sc-meta-tag">{pageLabel}</span>}
+        {(row.excerpt_count || 0) > 1 && <span className="sc-meta-tag">{row.excerpt_count} excerpts</span>}
+      </div>
       <div className="sc-head">
-        <span className="sc-num">S{row.id}</span>
         <span className="sc-title">{row.title || `Document ${row.doc_id ?? '?'}`}</span>
         {confPct != null && <span className={`sc-conf ${confCls}`}>{confPct}%</span>}
       </div>
-      <div className="sc-meta">
-        <span>{String(row.source || 'source')}</span>
-        {typeof row.page === 'number' && <><span className="sc-dot">·</span><span>p.{row.page}</span></>}
-        {row.cited && <><span className="sc-dot">·</span><span style={{ color: 'var(--green)' }}>cited</span></>}
+      <div className="sc-foot">
+        <span className={`sc-foot-state${row.cited ? ' cited' : ''}`}>{row.cited ? 'Cited' : 'Retrieved'}</span>
         {row.url && (
-          <><span className="sc-dot">·</span>
           <a className="sc-link" href={row.url} target="_blank" rel="noreferrer"
-             onClick={(e) => e.stopPropagation()}>Open ↗</a></>
+             onClick={(e) => e.stopPropagation()}>Open ↗</a>
         )}
       </div>
       {row.snippet_preview && <div className="sc-snippet">{row.snippet_preview}</div>}
@@ -194,6 +241,13 @@ function TypingIndicator() {
 // ── Source detail modal ───────────────────────────────────────────────────────
 function SourceModal({ row, onClose }: { row: SourceRow | null; onClose: () => void }) {
   if (!row) return null;
+  const pages = (row.pages || []).filter((p): p is number => typeof p === 'number');
+  const pageLabel =
+    pages.length > 1
+      ? ` · pp.${pages.join(', ')}`
+      : typeof row.page === 'number'
+        ? ` · p.${row.page}`
+        : '';
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
@@ -201,7 +255,7 @@ function SourceModal({ row, onClose }: { row: SourceRow | null; onClose: () => v
           <div>
             <div className="modal-head-title">{row.title || `Document ${row.doc_id ?? '?'}`}</div>
             <div className="modal-head-meta">
-              S{row.id} · {String(row.source || 'source')}{typeof row.page === 'number' ? ` · p.${row.page}` : ''}
+              S{row.id} · {String(row.source || 'source')}{pageLabel}
             </div>
           </div>
           <button className="modal-close" onClick={onClose}>✕</button>
@@ -261,7 +315,7 @@ function EvidencePanel({
   const rows = useMemo<SourceRow[]>(() => {
     const traceById = new Map<number, WhyTraceChunk>();
     (traceChunks || []).forEach((t, i) => traceById.set(t.id || i + 1, t));
-    return (citations || []).map((c, i) => {
+    const mapped = (citations || []).map((c, i) => {
       const id = c.id || i + 1;
       const trace = traceById.get(id);
       return {
@@ -278,6 +332,45 @@ function EvidencePanel({
         confidence_obj: c.confidence_obj,
       };
     });
+    const deduped = new Map<string, SourceRow>();
+    for (const row of mapped) {
+      const key = row.doc_id
+        ? `uploaded|${row.doc_id}`
+        : `${row.source || ''}|${row.url || ''}|${row.title || ''}`;
+      const existing = deduped.get(key);
+      if (!existing) {
+        deduped.set(key, {
+          ...row,
+          pages: typeof row.page === 'number' ? [row.page] : [],
+          citation_count: 1,
+          excerpt_count: 1,
+        });
+        continue;
+      }
+      const mergedPages = Array.from(new Set([
+        ...(existing.pages || (typeof existing.page === 'number' ? [existing.page] : [])),
+        ...(typeof row.page === 'number' ? [row.page] : []),
+      ])).sort((a, b) => a - b);
+      deduped.set(key, {
+        ...existing,
+        cited: Boolean(existing.cited || row.cited),
+        page: mergedPages[0] ?? existing.page ?? row.page,
+        pages: mergedPages,
+        citation_count: (existing.citation_count || 1) + 1,
+        excerpt_count: (existing.excerpt_count || 1) + 1,
+        snippet_preview: existing.snippet_preview || row.snippet_preview,
+        confidence_obj:
+          (row.confidence_obj?.score || 0) > (existing.confidence_obj?.score || 0)
+            ? row.confidence_obj
+            : existing.confidence_obj,
+        msa:
+          (row.msa?.msa_score || 0) > (existing.msa?.msa_score || 0)
+            ? row.msa
+            : existing.msa,
+        msa_supported: Boolean(existing.msa_supported || row.msa_supported),
+      });
+    }
+    return Array.from(deduped.values()).map((row, idx) => ({ ...row, id: idx + 1 }));
   }, [citations, traceChunks]);
 
   const visible = useMemo(() => {
@@ -293,10 +386,15 @@ function EvidencePanel({
         <div className="evidence-head">
           <div className="evidence-head-row">
             <div>
+              <div className="evidence-head-kicker">Inspector</div>
               <div className="evidence-head-title">Evidence</div>
-              {!loading && rows.length > 0 && (
-                <div className="evidence-head-sub">{rows.length} sources · {citedCount} cited</div>
-              )}
+              <div className="evidence-head-sub">
+                {loading
+                  ? (allowGeneralBackground ? 'Searching public sources…' : 'Inspecting retrieved support…')
+                  : rows.length > 0
+                    ? `${rows.length} sources · ${citedCount} cited`
+                    : 'Inspect citations, snippets, and supporting pages for the active answer.'}
+              </div>
             </div>
             {!loading && rows.length > 0 && (
               <div className="ev-scope-toggle">
@@ -337,9 +435,6 @@ function EvidencePanel({
           )}
         </div>
 
-        <div className="evidence-foot">
-          Confidence reflects retrieval quality and citation coverage. Hover badges for details.
-        </div>
       </div>
       <SourceModal row={modalRow} onClose={() => setModalRow(null)} />
     </>
@@ -372,6 +467,53 @@ function enrichQuery(current: string, msgs: UiMessage[]): string {
     }
   }
   return q;
+}
+
+function isExplicitDocumentQuery(text: string): boolean {
+  const q = text.trim().toLowerCase();
+  if (!q) return false;
+  return (
+    /\b(this|these|selected|uploaded)\s+(document|documents|file|files|pdf|pdfs)\b/.test(q) ||
+    /\bin\s+(this|these)\s+(document|documents|file|files)\b/.test(q) ||
+    /\b(across|from)\s+(these|selected)\s+(documents|files)\b/.test(q)
+  );
+}
+
+function isGreetingQuery(text: string): boolean {
+  const q = text.trim().toLowerCase();
+  return /^(hi|hello|hey|yo|sup|wassup|what'?s up|howdy|good morning|good afternoon|good evening|hola)[!.?]*$/.test(q);
+}
+
+function isAssistantSetupQuery(text: string): boolean {
+  const q = text.trim().toLowerCase();
+  return (
+    /\b(what can you do|how can you help)\b/.test(q) ||
+    /\b(help me with research|research based questions|research questions)\b/.test(q) ||
+    /\b(answer my research based questions)\b/.test(q)
+  );
+}
+
+function isLiteratureQuery(text: string): boolean {
+  const q = text.trim().toLowerCase();
+  return (
+    /\b(show me papers|find papers|give me papers|list papers|relevant papers|sources|citations|bibliography)\b/.test(q) ||
+    /\b(in the literature|recent papers|recent research|what do papers say)\b/.test(q)
+  );
+}
+
+function buildAssistantIntroReply(kind: 'greeting' | 'setup', hasUploads: boolean): string {
+  const intro = kind === 'greeting'
+    ? 'Hi. I can help with concept explanations, paper discovery, research synthesis, and document-grounded analysis.'
+    : 'I can explain concepts, find papers, compare findings across the literature, and analyze uploaded documents.';
+  const thirdPrompt = hasUploads
+    ? 'Select a document and ask for key findings or supporting evidence'
+    : 'Upload a paper and ask for a grounded summary';
+  return `${intro}
+
+Try one of these:
+- Tell me about RNNs
+- Show me papers on attention mechanisms
+- ${thirdPrompt}`;
 }
 
 // ── Eval page ─────────────────────────────────────────────────────────────────
@@ -589,52 +731,199 @@ function EvalPage({ onBack }: { onBack: () => void }) {
 }
 
 // ── Studio page ───────────────────────────────────────────────────────────────
-const STORAGE_KEY = 'scholarrag_studio_v2';
+const STORAGE_KEY = 'scholarrag_studio_v3';
+const MEMORY_PREF_KEY = 'scholarrag_memory_pref_v1';
+const DEFAULT_SESSION_TITLE = 'New chat';
+const EMPTY_EVIDENCE: EvidenceState = { citations: [], trace: [] };
+
+function createSessionId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function shortTitle(text: string): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (!compact) return DEFAULT_SESSION_TITLE;
+  return compact.length > 44 ? `${compact.slice(0, 44).trimEnd()}…` : compact;
+}
+
+function deriveSessionTitle(messages: UiMessage[]): string {
+  const firstUser = messages.find((m) => m.role === 'you' && m.text.trim());
+  return firstUser ? shortTitle(firstUser.text) : DEFAULT_SESSION_TITLE;
+}
+
+function createStudioSession(overrides: Partial<StudioSession> = {}): StudioSession {
+  const now = Date.now();
+  const messages = overrides.messages || [];
+  return {
+    id: overrides.id || createSessionId(),
+    title: overrides.title || deriveSessionTitle(messages),
+    messages,
+    selectedDocs: overrides.selectedDocs || [],
+    activeEvidence: overrides.activeEvidence || EMPTY_EVIDENCE,
+    activeEvidenceMsgIdx: overrides.activeEvidenceMsgIdx ?? -1,
+    allowGeneralBackground: overrides.allowGeneralBackground ?? false,
+    createdAt: overrides.createdAt ?? now,
+    updatedAt: overrides.updatedAt ?? now,
+  };
+}
+
+const INITIAL_SESSION = createStudioSession();
+
+function resolveUpdater<T>(next: T | ((prev: T) => T), prev: T): T {
+  return typeof next === 'function' ? (next as (prev: T) => T)(prev) : next;
+}
 
 function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
   const [docs, setDocs] = useState<DocumentRow[]>([]);
-  const [selectedDocs, setSelectedDocs] = useState<number[]>([]);
-  const [messages, setMessages] = useState<UiMessage[]>([]);
+  const [sessions, setSessions] = useState<StudioSession[]>([INITIAL_SESSION]);
+  const [activeSessionId, setActiveSessionId] = useState<string>(INITIAL_SESSION.id);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [allowGeneralBackground, setAllowGeneralBackground] = useState(false);
-  const [activeEvidence, setActiveEvidence] = useState<{ citations: Citation[]; trace: WhyTraceChunk[] }>({ citations: [], trace: [] });
-  const [activeEvidenceMsgIdx, setActiveEvidenceMsgIdx] = useState(-1);
   const [pendingDelete, setPendingDelete] = useState<DocumentRow | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<{ text: string; state: 'idle' | 'uploading' | 'done' | 'err' }>({ text: '', state: 'idle' });
   const [uploadPct, setUploadPct] = useState(0);
+  const [preserveMemory, setPreserveMemory] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(MEMORY_PREF_KEY) !== 'off';
+    } catch {
+      return true;
+    }
+  });
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const streamTimers = useRef<number[]>([]);
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.id === activeSessionId) || sessions[0] || INITIAL_SESSION,
+    [sessions, activeSessionId],
+  );
+  const messages = activeSession.messages;
+  const selectedDocs = activeSession.selectedDocs;
+  const allowGeneralBackground = activeSession.allowGeneralBackground;
+  const activeEvidence = activeSession.activeEvidence;
+  const activeEvidenceMsgIdx = activeSession.activeEvidenceMsgIdx;
+
+  const updateActiveSession = (updater: (session: StudioSession) => StudioSession) => {
+    setSessions((prev) =>
+      prev.map((session) =>
+        session.id === activeSessionId
+          ? { ...updater(session), updatedAt: Date.now() }
+          : session,
+      ),
+    );
+  };
+
+  const setMessages = (next: UiMessage[] | ((prev: UiMessage[]) => UiMessage[])) => {
+    updateActiveSession((session) => {
+      const messages = resolveUpdater(next, session.messages);
+      return {
+        ...session,
+        messages,
+        title: deriveSessionTitle(messages),
+      };
+    });
+  };
+
+  const setSelectedDocs = (next: number[] | ((prev: number[]) => number[])) => {
+    updateActiveSession((session) => ({
+      ...session,
+      selectedDocs: resolveUpdater(next, session.selectedDocs),
+    }));
+  };
+
+  const setAllowGeneralBackground = (next: boolean | ((prev: boolean) => boolean)) => {
+    updateActiveSession((session) => ({
+      ...session,
+      allowGeneralBackground: resolveUpdater(next, session.allowGeneralBackground),
+    }));
+  };
+
+  const setActiveEvidence = (next: EvidenceState | ((prev: EvidenceState) => EvidenceState)) => {
+    updateActiveSession((session) => ({
+      ...session,
+      activeEvidence: resolveUpdater(next, session.activeEvidence),
+    }));
+  };
+
+  const setActiveEvidenceMsgIdx = (next: number | ((prev: number) => number)) => {
+    updateActiveSession((session) => ({
+      ...session,
+      activeEvidenceMsgIdx: resolveUpdater(next, session.activeEvidenceMsgIdx),
+    }));
+  };
 
   // Restore session
   useEffect(() => {
+    if (!preserveMemory) return;
     try {
       const raw = sessionStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       const s = JSON.parse(raw);
-      if (Array.isArray(s.messages)) setMessages(s.messages);
-      if (Array.isArray(s.selectedDocs)) setSelectedDocs(s.selectedDocs);
-      if (s.activeEvidence) setActiveEvidence(s.activeEvidence);
+      if (Array.isArray(s.sessions) && s.sessions.length) {
+        const restored = s.sessions.map((session: any) => createStudioSession({
+          id: session.id,
+          title: session.title,
+          messages: Array.isArray(session.messages) ? session.messages : [],
+          selectedDocs: Array.isArray(session.selectedDocs) ? session.selectedDocs : [],
+          activeEvidence: session.activeEvidence || EMPTY_EVIDENCE,
+          activeEvidenceMsgIdx: typeof session.activeEvidenceMsgIdx === 'number' ? session.activeEvidenceMsgIdx : -1,
+          allowGeneralBackground: Boolean(session.allowGeneralBackground),
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+        }));
+        setSessions(restored);
+        setActiveSessionId(
+          restored.some((session: StudioSession) => session.id === s.activeSessionId)
+            ? s.activeSessionId
+            : restored[0].id,
+        );
+        return;
+      }
+      if (Array.isArray(s.messages)) {
+        const migrated = createStudioSession({
+          messages: s.messages,
+          selectedDocs: Array.isArray(s.selectedDocs) ? s.selectedDocs : [],
+          activeEvidence: s.activeEvidence || EMPTY_EVIDENCE,
+          activeEvidenceMsgIdx: typeof s.activeEvidenceMsgIdx === 'number' ? s.activeEvidenceMsgIdx : -1,
+        });
+        setSessions([migrated]);
+        setActiveSessionId(migrated.id);
+      }
     } catch {}
-  }, []);
+  }, [preserveMemory]);
 
   // Persist session
   useEffect(() => {
+    if (!preserveMemory) return;
     try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ messages, selectedDocs, activeEvidence }));
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ sessions, activeSessionId }));
     } catch {}
-  }, [messages, selectedDocs, activeEvidence]);
+  }, [sessions, activeSessionId, preserveMemory]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(MEMORY_PREF_KEY, preserveMemory ? 'on' : 'off');
+      if (!preserveMemory) {
+        sessionStorage.removeItem(STORAGE_KEY);
+      }
+    } catch {}
+  }, [preserveMemory]);
 
   const refreshDocs = async () => {
     try {
       const res = await api.listDocs();
       const list = res.documents || [];
       setDocs(list);
-      setSelectedDocs((prev) => prev.filter((id) => list.some((d) => d.id === id)));
+      setSessions((prev) =>
+        prev.map((session) => ({
+          ...session,
+          selectedDocs: session.selectedDocs.filter((id) => list.some((d) => d.id === id)),
+        })),
+      );
       setError('');
     } catch (e: any) {
       setError(e?.message || `Backend unreachable at ${API_BASE}`);
@@ -649,8 +938,6 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
     return () => clearInterval(id);
   }, [docs]);
 
-  useEffect(() => () => { streamTimers.current.forEach(clearInterval); }, []);
-
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
 
   const dedupedDocs = useMemo(() => {
@@ -663,10 +950,15 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
   }, [docs]);
 
   const selectedRows = useMemo(() => dedupedDocs.filter((d) => selectedDocs.includes(d.id)), [dedupedDocs, selectedDocs]);
-  const activeDoc = selectedRows[0] || dedupedDocs[0] || null;
+  const activeDoc = selectedRows[0] || null;
   const hasMulti = selectedRows.length > 1;
   const processedCount = dedupedDocs.filter((d) => d.status === 'ready').length;
   const processingCount = dedupedDocs.filter((d) => d.status === 'processing').length;
+  const orderedSessions = useMemo(
+    () => [...sessions].sort((a, b) => b.updatedAt - a.updatedAt),
+    [sessions],
+  );
+  const selectedPreview = selectedRows.slice(0, 3);
 
   const handleFiles = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -695,30 +987,20 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
     meta: Pick<UiMessage, 'citations' | 'confidence' | 'why_answer' | 'latency_breakdown_ms' | 'needs_clarification' | 'clarification' | 'answer_scope' | 'unsupported_claims' | 'query_ref' | 'faithfulness'>,
   ) => {
     const text = fullText || 'No response received. Check backend/OpenAI key.';
-    setMessages((prev) => [...prev, { role: 'assistant', text: '', streaming: true, ...meta }]);
+    setMessages((prev) => [...prev, { role: 'assistant', text, streaming: false, ...meta }]);
     setActiveEvidence({ citations: meta.citations || [], trace: meta.why_answer?.top_chunks || [] });
+  };
 
-    let idx = 0;
-    const step = Math.max(1, Math.ceil(text.length / 90));
-    const timer = window.setInterval(() => {
-      idx = Math.min(idx + step, text.length);
-      const done = idx >= text.length;
-      setMessages((prev) => {
-        const next = [...prev];
-        for (let i = next.length - 1; i >= 0; i--) {
-          if (next[i].role === 'assistant' && next[i].streaming) {
-            next[i] = { ...next[i], text: text.slice(0, idx), streaming: !done };
-            break;
-          }
-        }
-        return next;
-      });
-      if (done) {
-        clearInterval(timer);
-        streamTimers.current = streamTimers.current.filter((t) => t !== timer);
-      }
-    }, 14);
-    streamTimers.current.push(timer);
+  const startNewChat = () => {
+    const session = createStudioSession({
+      selectedDocs,
+      allowGeneralBackground,
+    });
+    setSessions((prev) => [session, ...prev]);
+    setActiveSessionId(session.id);
+    setInput('');
+    setError('');
+    setLoading(false);
   };
 
   const ask = async (text: string, skipEnrichment = false, sense?: string) => {
@@ -732,15 +1014,50 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
 
     try {
       const hasUploads = Boolean(selectedDocs.length || docs.length);
-      const scope: 'uploaded' | 'public' = allowGeneralBackground ? 'public' : (hasUploads ? 'uploaded' : 'public');
-      const query = allowGeneralBackground && !skipEnrichment ? enrichQuery(q, messages) : q;
+      if (isGreetingQuery(q)) {
+        streamMessage(
+          buildAssistantIntroReply('greeting', hasUploads),
+          { citations: [] },
+        );
+        setLoading(false);
+        return;
+      }
+      if (selectedDocs.length === 0 && isAssistantSetupQuery(q)) {
+        streamMessage(
+          buildAssistantIntroReply('setup', hasUploads),
+          { citations: [] },
+        );
+        setLoading(false);
+        return;
+      }
+      if (hasUploads && selectedDocs.length === 0 && isExplicitDocumentQuery(q)) {
+        streamMessage(
+          'Select one or more documents first, or ask a workspace-wide question without referring to "this document".',
+          { citations: [] },
+        );
+        setLoading(false);
+        return;
+      }
+      if (!allowGeneralBackground && isLiteratureQuery(q)) {
+        streamMessage(
+          selectedDocs.length > 0
+            ? 'Docs only mode is active. Ask about the selected document(s), or switch to Public research if you want papers, citations, or literature search.'
+            : 'Docs only mode is active. Select one or more documents for grounded answers, or switch to Public research if you want papers, citations, or literature search.',
+          { citations: [] },
+        );
+        setLoading(false);
+        return;
+      }
+      const forcePublicWithoutSelection = allowGeneralBackground && hasUploads && selectedDocs.length === 0;
+      const scope: 'uploaded' | 'public' =
+        forcePublicWithoutSelection ? 'public' : (hasUploads ? 'uploaded' : 'public');
+      const query = allowGeneralBackground && !skipEnrichment && scope === 'public' ? enrichQuery(q, messages) : q;
       const res = await api.askAssistant({
         query, scope, sense,
         doc_id: scope === 'uploaded' && selectedDocs.length === 1 ? selectedDocs[0] : undefined,
         doc_ids: scope === 'uploaded' && selectedDocs.length > 1 ? selectedDocs : undefined,
-        k: 10,
+        k: 8,
         allow_general_background: allowGeneralBackground,
-        run_judge_llm: true,
       });
       streamMessage((res.answer || res.clarification?.question || '').trim(), {
         citations: res.citations || [],
@@ -765,6 +1082,22 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
   const toggleDoc = (id: number) =>
     setSelectedDocs((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
 
+  const forgetMemoryNow = () => {
+    updateActiveSession((session) => ({
+      ...session,
+      title: DEFAULT_SESSION_TITLE,
+      messages: [],
+      activeEvidence: EMPTY_EVIDENCE,
+      activeEvidenceMsgIdx: -1,
+    }));
+    setInput('');
+    setError('');
+    setLoading(false);
+    try {
+      sessionStorage.removeItem(STORAGE_KEY);
+    } catch {}
+  };
+
   const confirmDelete = async () => {
     if (!pendingDelete) return;
     try {
@@ -777,42 +1110,78 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
   };
 
   const quickAsk = (prompt: string) => ask(prompt, true);
+  const activeSessionTitle = activeSession.title !== DEFAULT_SESSION_TITLE
+    ? activeSession.title
+    : 'Chat with your research';
 
-  const EMPTY_CARDS = [
-    {
-      icon: '📋',
-      text: hasMulti ? 'Summarize all selected documents' : 'Summarize this document',
-      prompt: hasMulti
-        ? 'Summarize the selected uploaded documents. Organize by document and provide combined takeaways.'
-        : 'Summarize the selected uploaded document.',
-    },
-    {
-      icon: '🔑',
-      text: 'Extract key concepts',
-      prompt: hasMulti
-        ? 'Extract key skills, topics, and main points from each selected document.'
-        : 'What are the key skills or topics in this document?',
-    },
-    {
-      icon: '🔍',
-      text: 'Find supporting evidence',
-      prompt: hasMulti
-        ? 'What evidence best supports the main claims across these documents?'
-        : 'What evidence best supports the main claims in this document?',
-    },
-    {
-      icon: '🔬',
-      text: 'Describe the methodology',
-      prompt: 'Describe the methodology, approach, and experimental setup used in this research.',
-    },
-  ];
+  const EMPTY_CARDS = activeDoc || hasMulti
+    ? [
+        {
+          eyebrow: 'Summary',
+          title: hasMulti ? 'Summarize selected documents' : 'Summarize selected document',
+          text: 'Get the main findings, structure, and takeaways in a compact form.',
+          prompt: hasMulti
+            ? 'Summarize the selected uploaded documents. Organize by document and provide combined takeaways.'
+            : 'Summarize the selected uploaded document.',
+        },
+        {
+          eyebrow: 'Key points',
+          title: 'Extract key concepts',
+          text: 'Highlight the most important skills, topics, and claims.',
+          prompt: hasMulti
+            ? 'Extract key skills, topics, and main points from each selected document.'
+            : 'What are the key skills or topics in this document?',
+        },
+        {
+          eyebrow: 'Evidence',
+          title: 'Inspect supporting evidence',
+          text: 'Surface the chunks and pages that best support the main claims.',
+          prompt: hasMulti
+            ? 'What evidence best supports the main claims across these documents?'
+            : 'What evidence best supports the main claims in this document?',
+        },
+        {
+          eyebrow: 'Analysis',
+          title: 'Find gaps and risks',
+          text: 'Point out ambiguities, weak support, or missing details in the material.',
+          prompt: hasMulti
+            ? 'Identify weakly supported claims, inconsistencies, or missing details across these documents.'
+            : 'Identify weakly supported claims, inconsistencies, or missing details in this document.',
+        },
+      ]
+    : [
+        {
+          eyebrow: 'Explain',
+          title: 'Understand a concept',
+          text: 'Get a clear explanation grounded in relevant research sources.',
+          prompt: 'Tell me about retrieval-augmented generation.',
+        },
+        {
+          eyebrow: 'Discover',
+          title: 'Find relevant papers',
+          text: 'Pull strong papers, surveys, or references on a research topic.',
+          prompt: 'Show me papers on transformer interpretability.',
+        },
+        {
+          eyebrow: 'Compare',
+          title: 'Compare methods',
+          text: 'Synthesize tradeoffs, strengths, and limitations across approaches.',
+          prompt: 'Compare LSTMs and GRUs in the literature.',
+        },
+        {
+          eyebrow: 'Ground',
+          title: 'Analyze an uploaded document',
+          text: 'Upload a PDF, select it, then ask for summaries or evidence-backed answers.',
+          prompt: 'What are the key findings of the selected document?',
+        },
+      ];
 
   return (
     <div className="app-shell">
       {/* ── Sidebar ── */}
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <div className="brand-icon">🎓</div>
+          <div className="brand-icon">SR</div>
           <div className="brand-text">
             <div className="brand-name">ScholarRAG</div>
             <div className="brand-sub">Research assistant</div>
@@ -826,6 +1195,92 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
               <span>
                 {processedCount} ready{processingCount ? ` · ${processingCount} processing` : ''}
               </span>
+            </div>
+            <div className="workspace-card">
+              <div className="workspace-card-head">
+                <div className="workspace-card-title">Research workspace</div>
+                <span className="workspace-card-chip">{orderedSessions.length} chats</span>
+              </div>
+              <div className="workspace-card-copy">
+                Keep documents on the left, work in sessions, and inspect grounding evidence on the right.
+              </div>
+              <div className="workspace-card-metrics">
+                <div className="workspace-metric">
+                  <span className="workspace-metric-value">{processedCount}</span>
+                  <span className="workspace-metric-label">Ready docs</span>
+                </div>
+                <div className="workspace-metric">
+                  <span className="workspace-metric-value">{orderedSessions.length}</span>
+                  <span className="workspace-metric-label">Chat sessions</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="sidebar-section">
+            <div className="sidebar-label">
+              <span>Chats</span>
+              <button className="sidebar-inline-action" onClick={startNewChat}>+ New</button>
+            </div>
+            <div className="chat-session-list">
+              {orderedSessions.map((session) => {
+                const isActive = session.id === activeSessionId;
+                const turnCount = session.messages.filter((m) => m.role === 'you').length;
+                return (
+                  <button
+                    key={session.id}
+                    className={`chat-session-item${isActive ? ' active' : ''}`}
+                    onClick={() => {
+                      setActiveSessionId(session.id);
+                      setInput('');
+                      setError('');
+                      setLoading(false);
+                    }}
+                  >
+                    <div className="chat-session-title-row">
+                      <span className="chat-session-title">{session.title}</span>
+                      {isActive && <span className="chat-session-pill">Open</span>}
+                    </div>
+                    <div className="chat-session-meta">
+                      {turnCount ? `${turnCount} prompts` : 'Empty chat'}
+                      {session.selectedDocs.length ? ` · ${session.selectedDocs.length} doc${session.selectedDocs.length > 1 ? 's' : ''}` : ''}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="sidebar-section">
+            <div className="sidebar-label">
+              <span>Session</span>
+              <span>{preserveMemory ? 'saved' : 'ephemeral'}</span>
+            </div>
+            <div className="session-card">
+              <div className="session-card-copy">
+                Keep the current chat across refreshes, or turn memory off for a temporary scratch session.
+              </div>
+              <div className="session-actions">
+                <button
+                  className={`session-toggle${preserveMemory ? ' active' : ''}`}
+                  onClick={() => setPreserveMemory((prev) => !prev)}
+                  aria-pressed={preserveMemory}
+                  type="button"
+                >
+                  <span className="session-toggle-track">
+                    <span className="session-toggle-thumb" />
+                  </span>
+                  <span>{preserveMemory ? 'Memory on' : 'Memory off'}</span>
+                </button>
+                <button
+                  className="session-clear"
+                  onClick={forgetMemoryNow}
+                  disabled={messages.length === 0}
+                  type="button"
+                >
+                  Clear chat
+                </button>
+              </div>
             </div>
           </div>
 
@@ -929,15 +1384,16 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
       <div className="main-content">
         <div className="topbar">
           <div className="topbar-left">
+            <div className="topbar-kicker">Research workspace</div>
             <div className="topbar-title">
               {hasMulti
                 ? `${selectedRows.length} documents selected`
-                : (activeDoc ? activeDoc.title : 'Chat with your research')}
+                : (activeDoc ? activeDoc.title : activeSessionTitle)}
             </div>
             <div className="topbar-sub">
               {hasMulti
                 ? 'Cross-document analysis mode'
-                : (activeDoc ? 'Grounded research assistant' : 'Upload a document to get started')}
+                : (activeDoc ? 'Grounded research assistant' : 'Session-based research assistant')}
             </div>
           </div>
           <div className="topbar-right">
@@ -954,29 +1410,66 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
           </div>
         </div>
 
+        <div className="context-strip">
+          <div className="context-strip-label">Active context</div>
+          <div className="context-chip-row">
+            <span className={`context-chip mode ${allowGeneralBackground ? 'public' : 'docs'}`}>
+              {allowGeneralBackground ? 'Public research enabled' : 'Docs only mode'}
+            </span>
+            {selectedRows.length === 0 && !allowGeneralBackground && (
+              <span className="context-chip muted">No documents selected</span>
+            )}
+            {selectedPreview.map((doc) => (
+              <button key={doc.id} className="context-chip" onClick={() => toggleDoc(doc.id)}>
+                {doc.title}
+                <span className="context-chip-close">×</span>
+              </button>
+            ))}
+            {selectedRows.length > selectedPreview.length && (
+              <span className="context-chip muted">+{selectedRows.length - selectedPreview.length} more</span>
+            )}
+          </div>
+        </div>
+
         {/* Chat stream */}
         <div className="chat-stream">
           <div className="chat-inner">
             {messages.length === 0 && !loading && (
               <div className="chat-empty">
-                <div className="chat-empty-logo">🎓</div>
-                <div className="chat-empty-title">Ask anything about your research</div>
-                <div className="chat-empty-sub">
-                  {activeDoc
-                    ? `Currently focused on "${activeDoc.title}". Ask questions, request summaries, or explore key findings.`
-                    : 'Upload a PDF to start a grounded conversation, or enable Public Research to search scholarly databases.'}
-                </div>
-                {activeDoc && (
-                  <div className="empty-grid">
-                    {EMPTY_CARDS.map((card) => (
-                      <button key={card.text} className="empty-card" onClick={() => quickAsk(card.prompt)}>
-                        <div className="empty-card-icon">{card.icon}</div>
-                        <div className="empty-card-text">{card.text}</div>
-                        <div className="empty-card-cta">Ask this →</div>
-                      </button>
-                    ))}
+                <div className="chat-empty-hero">
+                  <div className="chat-empty-kicker">Grounded AI research assistant</div>
+                  <div className="chat-empty-logo">SR</div>
+                  <div className="chat-empty-title">Ask better research questions</div>
+                  <div className="chat-empty-sub">
+                    {activeDoc
+                      ? `You’re currently focused on "${activeDoc.title}". Ask for summaries, evidence, gaps, or key findings.`
+                      : 'Search the literature, explain concepts, compare methods, or upload documents for grounded analysis.'}
                   </div>
-                )}
+                  <div className="hero-hints">
+                    <div className="hero-hint">
+                      <span className="hero-hint-label">Explain</span>
+                      <strong>Tell me about RNNs</strong>
+                    </div>
+                    <div className="hero-hint">
+                      <span className="hero-hint-label">Discover</span>
+                      <strong>Show me papers on multimodal attention</strong>
+                    </div>
+                    <div className="hero-hint">
+                      <span className="hero-hint-label">Compare</span>
+                      <strong>Compare LSTMs and GRUs in the literature</strong>
+                    </div>
+                  </div>
+                </div>
+                <div className="empty-grid">
+                  {EMPTY_CARDS.map((card) => (
+                    <button key={card.title} className="empty-card" onClick={() => quickAsk(card.prompt)}>
+                      <div className="empty-card-eyebrow">{card.eyebrow}</div>
+                      <div className="empty-card-title">{card.title}</div>
+                      <div className="empty-card-text">{card.text}</div>
+                      <div className="empty-card-cta">Run this prompt →</div>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -1003,8 +1496,13 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
                 {m.role === 'assistant' && !m.streaming && (
                   <>
                     <div className="msg-meta">
+                      <div className="assistant-card-head">
+                        <span className="assistant-card-label">{formatAnswerScope(m.answer_scope) || 'Answer'}</span>
+                        {m.citations?.length ? (
+                          <span className="assistant-card-count">{m.citations.length} source{m.citations.length > 1 ? 's' : ''}</span>
+                        ) : null}
+                      </div>
                       <ConfBadge confidence={m.confidence} />
-                      {m.answer_scope && <span className="meta-chip">Scope: {m.answer_scope}</span>}
                       {m.faithfulness && (
                         <span className="meta-chip">
                           Faithfulness: {Math.round((m.faithfulness.overall_score || 0) * 100)}%
@@ -1064,7 +1562,9 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
                 placeholder={
                   allowGeneralBackground
                     ? 'Search public research or ask about your documents…'
-                    : 'Ask about your uploaded documents…'
+                    : selectedDocs.length > 0
+                      ? 'Ask about your selected documents…'
+                      : 'Select a document, or switch to Public research for general questions…'
                 }
                 disabled={loading}
                 onChange={(e) => setInput(e.target.value)}
@@ -1089,7 +1589,6 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
                 {!loading && '↑'}
               </button>
             </div>
-            <div className="composer-hint">Enter to send · Shift+Enter for newline</div>
           </div>
         </div>
       </div>
