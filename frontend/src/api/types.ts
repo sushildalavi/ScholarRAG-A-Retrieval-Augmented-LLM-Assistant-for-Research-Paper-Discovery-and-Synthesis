@@ -310,6 +310,7 @@ export type LatestResearchPaper = {
 export type LatestResearchResponse = {
   topic?: string | null;
   days: number;
+  sort?: string | null;
   results: LatestResearchPaper[];
   provider_status?: Record<string, { ok?: boolean; count?: number; error?: string }>;
 };

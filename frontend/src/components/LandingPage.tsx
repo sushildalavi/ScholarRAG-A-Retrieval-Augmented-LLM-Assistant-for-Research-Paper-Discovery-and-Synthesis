@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import type { LatestResearchPaper } from '../api/types';
 
@@ -6,46 +6,49 @@ type LandingPageProps = {
   authAvailable: boolean;
   signedIn: boolean;
   userLabel?: string | null;
+  theme: 'dark' | 'light';
+  onToggleTheme: () => void;
   onOpenWorkspace: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
 };
 
 type FeedSort = 'latest' | 'trending' | 'top_cited';
+type SourceKind = 'openalex' | 'arxiv' | 'semantic' | 'crossref' | 'springer' | 'elsevier' | 'ieee';
 
 const FEATURE_BLOCKS = [
   {
     eyebrow: 'Grounded answers',
     title: 'Answer first, evidence second',
-    text: 'ScholarRAG keeps citations, snippets, and source tracing in a dedicated inspector so the main conversation stays readable.',
+    text: 'ScholarRAG keeps citations, snippets, and support traces in a separate inspector so the main answer stays clean.',
   },
   {
     eyebrow: 'One workspace',
     title: 'Public literature and uploaded documents together',
-    text: 'Move between paper discovery, synthesis, and PDF-grounded analysis without switching products or losing context.',
+    text: 'Move from paper discovery to grounded document analysis without changing tools or losing your working context.',
   },
   {
     eyebrow: 'Trust layer',
-    title: 'Confidence and inspection built in',
-    text: 'Every answer can be inspected through cited evidence, source links, and support signals instead of unsupported prose.',
+    title: 'Evidence and confidence built in',
+    text: 'Every answer can be inspected through cited sources, links, and support signals instead of unsupported prose.',
   },
 ];
 
 const WORKFLOW_STEPS = [
   {
     index: '01',
-    title: 'Find the strongest papers fast',
-    text: 'Search live scholarly sources, filter by what matters, and jump directly into the papers worth reading.',
+    title: 'Search and filter live literature',
+    text: 'Pull recent, trending, or highly cited work from scholarly sources without manually hopping across databases.',
   },
   {
     index: '02',
-    title: 'Synthesize instead of skimming',
-    text: 'Get answer-first summaries and literature comparisons, while detailed evidence stays in a separate inspector.',
+    title: 'Synthesize findings quickly',
+    text: 'Ask conceptual or research questions and get a structured answer instead of a raw search-results dump.',
   },
   {
     index: '03',
-    title: 'Ground answers in your own files',
-    text: 'Upload PDFs, select the right documents, and ask page-aware questions without losing the surrounding research context.',
+    title: 'Ground answers in your own PDFs',
+    text: 'Upload documents, select the right context, and inspect page-aware evidence in the same workspace.',
   },
 ];
 
@@ -55,15 +58,14 @@ const FEED_FILTERS: Array<{ value: FeedSort; label: string }> = [
   { value: 'top_cited', label: 'Top cited' },
 ];
 
-const SOURCE_PARTNERS = [
-  'OpenAlex',
-  'arXiv',
-  'Semantic Scholar',
-  'Crossref',
-  'Springer',
-  'Elsevier',
-  'IEEE',
-  'Google Scholar',
+const SOURCE_PARTNERS: Array<{ name: string; kind: SourceKind; logoSlug: string; logoColor?: string; homepage: string }> = [
+  { name: 'OpenAlex', kind: 'openalex', logoSlug: 'openalex', logoColor: '8B5CF6', homepage: 'https://openalex.org' },
+  { name: 'arXiv', kind: 'arxiv', logoSlug: 'arxiv', logoColor: 'B31B1B', homepage: 'https://arxiv.org' },
+  { name: 'Semantic Scholar', kind: 'semantic', logoSlug: 'semanticscholar', logoColor: '1857B6', homepage: 'https://www.semanticscholar.org' },
+  { name: 'Crossref', kind: 'crossref', logoSlug: 'crossref', logoColor: '0057B8', homepage: 'https://www.crossref.org' },
+  { name: 'Springer', kind: 'springer', logoSlug: 'springernature', logoColor: '009FE3', homepage: 'https://link.springer.com' },
+  { name: 'Elsevier', kind: 'elsevier', logoSlug: 'elsevier', logoColor: 'FF6C00', homepage: 'https://www.elsevier.com' },
+  { name: 'IEEE', kind: 'ieee', logoSlug: 'ieee', logoColor: '00629B', homepage: 'https://ieeexplore.ieee.org' },
 ];
 
 function GoogleIcon() {
@@ -77,23 +79,53 @@ function GoogleIcon() {
   );
 }
 
-function ScholarMark() {
+function ThemeIcon({ theme }: { theme: 'dark' | 'light' }) {
   return (
-    <div className="landing-brand-mark" aria-hidden="true">
-      <span className="landing-brand-star" />
-      <span className="landing-brand-orbit" />
-    </div>
+    <svg viewBox="0 0 24 24" className="landing-inline-icon" aria-hidden="true" fill="none">
+      {theme === 'dark' ? (
+        <path d="M12 3.5a1 1 0 0 1 1 1V6a1 1 0 1 1-2 0V4.5a1 1 0 0 1 1-1Zm0 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm7.5-4.5a1 1 0 0 1 1 1 8.5 8.5 0 1 1-8.5-8.5 1 1 0 1 1 0 2A6.5 6.5 0 1 0 18.5 12a1 1 0 0 1 1-1Z" fill="currentColor" />
+      ) : (
+        <path d="M21 12.8A8.8 8.8 0 1 1 11.2 3a7 7 0 1 0 9.8 9.8Z" fill="currentColor" />
+      )}
+    </svg>
   );
 }
 
-function paperScholarHref(paper: LatestResearchPaper) {
-  return `https://scholar.google.com/scholar?q=${encodeURIComponent(paper.title)}`;
+function SettingsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="landing-inline-icon" aria-hidden="true" fill="none">
+      <path d="M10.3 3.4a1 1 0 0 1 1.4-.5l.3.2a2 2 0 0 0 2 0l.3-.2a1 1 0 0 1 1.4.5l.5 1a2 2 0 0 0 1.5 1.1l1.1.2a1 1 0 0 1 .8 1.3l-.1.3a2 2 0 0 0 .4 2l.7.9a1 1 0 0 1 0 1.4l-.7.9a2 2 0 0 0-.4 2l.1.3a1 1 0 0 1-.8 1.3l-1.1.2a2 2 0 0 0-1.5 1.1l-.5 1a1 1 0 0 1-1.4.5l-.3-.2a2 2 0 0 0-2 0l-.3.2a1 1 0 0 1-1.4-.5l-.5-1a2 2 0 0 0-1.5-1.1l-1.1-.2a1 1 0 0 1-.8-1.3l.1-.3a2 2 0 0 0-.4-2l-.7-.9a1 1 0 0 1 0-1.4l.7-.9a2 2 0 0 0 .4-2l-.1-.3a1 1 0 0 1 .8-1.3l1.1-.2A2 2 0 0 0 9.8 5l.5-1Z" stroke="currentColor" strokeWidth="1.5" />
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function SourceLogo({ name, logoSlug, logoColor }: { name: string; logoSlug: string; logoColor?: string }) {
+  const [failed, setFailed] = useState(false);
+  const abbrev = name.split(' ').map((w) => w[0]).join('').slice(0, 3).toUpperCase();
+  if (failed) {
+    return (
+      <span className="landing-source-abbrev" style={{ '--abbrev-color': `#${logoColor || '8b5cf6'}` } as React.CSSProperties}>
+        {abbrev}
+      </span>
+    );
+  }
+  return (
+    <img
+      className="landing-source-logo"
+      src={`https://cdn.simpleicons.org/${logoSlug}/${logoColor || 'FFFFFF'}`}
+      alt={name}
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+    />
+  );
 }
 
 function LatestPaperCard({ paper, index }: { paper: LatestResearchPaper; index: number }) {
-  const href = paper.url || paper.pdf_url || paperScholarHref(paper);
+  const href = paper.url || paper.pdf_url || '#';
   const summary = (paper.abstract || paper.why_relevant || 'Recent research result.').replace(/\s+/g, ' ').trim();
-  const preview = summary.length > 380 ? `${summary.slice(0, 380)}…` : summary;
+  const preview = summary.length > 220 ? `${summary.slice(0, 220)}…` : summary;
   const providerLabel = (paper.provider || 'source').replace(/_/g, ' ');
   const authors = (paper.authors || []).slice(0, 5).join(', ') || 'Authors unavailable';
 
@@ -114,12 +146,6 @@ function LatestPaperCard({ paper, index }: { paper: LatestResearchPaper; index: 
       <p>{preview}</p>
       <div className="landing-paper-foot">
         <div className="landing-paper-links">
-          <a href={href} target="_blank" rel="noreferrer">
-            Open paper ↗
-          </a>
-          <a href={paperScholarHref(paper)} target="_blank" rel="noreferrer">
-            Scholar ↗
-          </a>
           {paper.pdf_url && (
             <a href={paper.pdf_url} target="_blank" rel="noreferrer">
               PDF ↗
@@ -135,6 +161,8 @@ export function LandingPage({
   authAvailable,
   signedIn,
   userLabel,
+  theme,
+  onToggleTheme,
   onOpenWorkspace,
   onSignIn,
   onSignOut,
@@ -144,23 +172,16 @@ export function LandingPage({
   const [papers, setPapers] = useState<LatestResearchPaper[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
 
-  const headerLabel = signedIn ? userLabel || 'Signed in' : 'Guest session';
-  const activeTopic = useMemo(() => topic.trim(), [topic]);
-  const scholarTopicHref = useMemo(
-    () =>
-      `https://scholar.google.com/scholar?q=${encodeURIComponent(
-        activeTopic || 'artificial intelligence machine learning natural language processing'
-      )}`,
-    [activeTopic]
-  );
+  const activeTopic = topic.trim();
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError('');
     api
-      .latestResearch({ topic: activeTopic || undefined, limit: 6, days: 45, sort })
+      .latestResearch({ topic: activeTopic || undefined, limit: 6, days: sort === 'top_cited' ? 365 : 45, sort })
       .then((res) => {
         if (!cancelled) setPapers(res.results || []);
       })
@@ -183,24 +204,75 @@ export function LandingPage({
 
       <header className="landing-topbar">
         <div className="landing-brand">
-          <ScholarMark />
+          <span className="landing-brand-mark" aria-hidden="true">
+            <span className="landing-mark-sheet landing-mark-sheet-back" />
+            <span className="landing-mark-sheet landing-mark-sheet-front" />
+            <span className="landing-mark-accent" />
+          </span>
           <div>
             <div className="landing-brand-name">ScholarRAG</div>
             <div className="landing-brand-sub">Citation-grounded research workspace</div>
           </div>
         </div>
         <div className="landing-topbar-actions">
-          <div className="landing-user-pill">{headerLabel}</div>
-          {authAvailable && signedIn ? (
-            <button className="landing-btn landing-btn-ghost" type="button" onClick={onSignOut}>
-              Sign out
+          <div className="landing-settings">
+            <button
+              className={`landing-btn landing-btn-ghost landing-btn-icon landing-settings-trigger${showSettings ? ' active' : ''}`}
+              type="button"
+              onClick={() => setShowSettings((value) => !value)}
+            >
+              <SettingsIcon />
+              <span>Settings</span>
             </button>
-          ) : authAvailable ? (
-            <button className="landing-btn landing-btn-google" type="button" onClick={onSignIn}>
-              <GoogleIcon />
-              <span>Sign in with Google</span>
-            </button>
-          ) : null}
+            {showSettings && (
+              <div className="landing-settings-menu">
+                <div className="landing-settings-section">
+                  <div className="landing-settings-label">Appearance</div>
+                  <button className="landing-settings-action" type="button" onClick={() => { setShowSettings(false); onToggleTheme(); }}>
+                    <span className="landing-settings-action-icon">{theme === 'dark' ? '☀' : '🌙'}</span>
+                    Switch to {theme === 'dark' ? 'light' : 'dark'} mode
+                  </button>
+                </div>
+                <div className="landing-settings-section">
+                  <div className="landing-settings-label">Research feed</div>
+                  <div className="landing-settings-row-label">Default sort</div>
+                  <div className="landing-settings-chips">
+                    {FEED_FILTERS.map((f) => (
+                      <button
+                        key={f.value}
+                        type="button"
+                        className={`landing-settings-chip${sort === f.value ? ' active' : ''}`}
+                        onClick={() => setSort(f.value)}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="landing-settings-hint">
+                    {sort === 'top_cited' ? 'Searches ~8 years back for highest-cited work' : sort === 'trending' ? 'Scores papers by citations per day (decay-weighted)' : 'Most recently published across all sources'}
+                  </div>
+                </div>
+                {authAvailable && (
+                  <div className="landing-settings-section">
+                    <div className="landing-settings-label">Account</div>
+                    {signedIn ? (
+                      <>
+                        {userLabel ? <div className="landing-settings-user">{userLabel}</div> : null}
+                        <button className="landing-settings-action danger" type="button" onClick={() => { setShowSettings(false); onSignOut(); }}>
+                          Sign out
+                        </button>
+                      </>
+                    ) : (
+                      <button className="landing-settings-action google" type="button" onClick={() => { setShowSettings(false); onSignIn(); }}>
+                        <GoogleIcon />
+                        <span>Sign in with Google</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           <button className="landing-btn landing-btn-primary" type="button" onClick={onOpenWorkspace}>
             Open workspace
           </button>
@@ -219,16 +291,14 @@ export function LandingPage({
             </p>
             <div className="landing-hero-actions">
               <button className="landing-btn landing-btn-primary" type="button" onClick={onOpenWorkspace}>
-                Start in the workspace
+                Open workspace →
               </button>
-              {authAvailable && !signedIn && (
-                <button className="landing-btn landing-btn-secondary landing-btn-google" type="button" onClick={onSignIn}>
-                  <GoogleIcon />
-                  <span>Sign in with Google</span>
-                </button>
-              )}
-              <a className="landing-btn landing-btn-ghost" href={scholarTopicHref} target="_blank" rel="noreferrer">
-                Search Google Scholar
+              <a
+                className="landing-btn landing-btn-ghost landing-btn-icon"
+                href="#research-feed"
+                onClick={(e) => { e.preventDefault(); document.getElementById('research-feed')?.scrollIntoView({ behavior: 'smooth' }); }}
+              >
+                Explore feed ↓
               </a>
             </div>
             <div className="landing-proof-row">
@@ -306,11 +376,16 @@ export function LandingPage({
           </div>
         </section>
 
-        <section className="landing-section">
+        <section className="landing-section" id="research-feed">
           <div className="landing-section-head landing-section-head-feed">
             <div>
               <div className="landing-kicker">Latest research</div>
-              <h2>Recent papers to explore right now.</h2>
+              <h2>
+                {sort === 'top_cited' ? 'Most cited papers in the field.' : sort === 'trending' ? 'Trending papers right now.' : 'Recent papers to explore right now.'}
+              </h2>
+              {sort === 'top_cited' && (
+                <p className="landing-feed-scope-hint">Searching across ~8 years — results are from OpenAlex ranked by total citations.</p>
+              )}
             </div>
             <div className="landing-feed-controls">
               <div className="landing-feed-filters">
@@ -331,9 +406,6 @@ export function LandingPage({
                 onChange={(e) => setTopic(e.target.value)}
                 placeholder="Filter by topic, e.g. transformer interpretability"
               />
-              <a className="landing-btn landing-btn-ghost landing-btn-inline" href={scholarTopicHref} target="_blank" rel="noreferrer">
-                Search on Google Scholar
-              </a>
             </div>
           </div>
 
@@ -366,13 +438,22 @@ export function LandingPage({
               <h2>Connected to the scholarly ecosystem.</h2>
             </div>
           </div>
-          <div className="landing-partner-grid">
-            {SOURCE_PARTNERS.map((partner, index) => (
-              <div key={partner} className="landing-partner-card" style={{ animationDelay: `${index * 50}ms` }}>
-                <span className="landing-partner-badge" />
-                <span>{partner}</span>
-              </div>
-            ))}
+          <div className="landing-marquee" aria-label="Scholarly sources">
+            <div className="landing-marquee-track">
+              {[...SOURCE_PARTNERS, ...SOURCE_PARTNERS].map((partner, index) => (
+                <a
+                  key={`${partner.name}-${index}`}
+                  href={partner.homepage}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="landing-partner-chip"
+                  title={`Visit ${partner.name}`}
+                >
+                  <SourceLogo name={partner.name} logoSlug={partner.logoSlug} logoColor={partner.logoColor} />
+                  <span>{partner.name}</span>
+                </a>
+              ))}
+            </div>
           </div>
         </section>
       </main>

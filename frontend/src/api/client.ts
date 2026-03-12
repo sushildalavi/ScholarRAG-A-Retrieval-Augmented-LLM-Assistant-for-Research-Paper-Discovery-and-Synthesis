@@ -148,11 +148,12 @@ export const api = {
     return jsonRequest('/confidence/calibration');
   },
 
-  async latestResearch(params?: { topic?: string; limit?: number; days?: number }): Promise<LatestResearchResponse> {
+  async latestResearch(params?: { topic?: string; limit?: number; days?: number; sort?: 'latest' | 'trending' | 'top_cited' }): Promise<LatestResearchResponse> {
     const search = new URLSearchParams();
     if (params?.topic) search.set('topic', params.topic);
     if (params?.limit) search.set('limit', String(params.limit));
     if (params?.days) search.set('days', String(params.days));
+    if (params?.sort) search.set('sort', params.sort);
     const qs = search.toString();
     return jsonRequest(`/research/latest${qs ? `?${qs}` : ''}`);
   },

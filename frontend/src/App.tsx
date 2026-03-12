@@ -14,6 +14,7 @@ import { getSupabaseClient } from './lib/supabase';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Page = 'landing' | 'studio' | 'eval';
+type ThemeMode = 'dark' | 'light';
 
 type UiMessage = {
   role: 'you' | 'assistant';
@@ -141,6 +142,46 @@ function renderMarkdown(raw: string): ReactNode {
   return <div className="md">{out}</div>;
 }
 
+function GoogleIcon() {
+  return (
+    <svg aria-hidden="true" className="workspace-inline-icon workspace-google-icon" viewBox="0 0 24 24" fill="none">
+      <path d="M21.8 12.23c0-.76-.07-1.49-.2-2.2H12v4.16h5.49a4.7 4.7 0 0 1-2.04 3.08v2.56h3.31c1.94-1.78 3.04-4.4 3.04-7.6Z" fill="#4285F4" />
+      <path d="M12 22c2.75 0 5.05-.91 6.73-2.47l-3.31-2.56c-.92.62-2.09.99-3.42.99-2.63 0-4.86-1.77-5.65-4.16H2.93v2.64A10 10 0 0 0 12 22Z" fill="#34A853" />
+      <path d="M6.35 13.8A5.98 5.98 0 0 1 6 12c0-.63.12-1.24.35-1.8V7.56H2.93A10 10 0 0 0 2 12c0 1.61.38 3.13 1.06 4.44l3.29-2.64Z" fill="#FBBC05" />
+      <path d="M12 6.04c1.5 0 2.84.52 3.89 1.55l2.92-2.92C17.04 2.99 14.75 2 12 2a10 10 0 0 0-9.07 5.56L6.35 10.2c.79-2.39 3.02-4.16 5.65-4.16Z" fill="#EA4335" />
+    </svg>
+  );
+}
+
+function HomeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="workspace-inline-icon" aria-hidden="true" fill="none">
+      <path d="M4 11.5 12 5l8 6.5v7a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 14 18.5V15h-4v3.5A1.5 1.5 0 0 1 8.5 20h-3A1.5 1.5 0 0 1 4 18.5v-7Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ThemeIcon({ theme }: { theme: ThemeMode }) {
+  return (
+    <svg viewBox="0 0 24 24" className="workspace-inline-icon" aria-hidden="true" fill="none">
+      {theme === 'dark' ? (
+        <path d="M12 3.5a1 1 0 0 1 1 1V6a1 1 0 1 1-2 0V4.5a1 1 0 0 1 1-1Zm0 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm7.5-4.5a1 1 0 0 1 1 1 8.5 8.5 0 1 1-8.5-8.5 1 1 0 1 1 0 2A6.5 6.5 0 1 0 18.5 12a1 1 0 0 1 1-1Z" fill="currentColor" />
+      ) : (
+        <path d="M21 12.8A8.8 8.8 0 1 1 11.2 3a7 7 0 1 0 9.8 9.8Z" fill="currentColor" />
+      )}
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="workspace-inline-icon" aria-hidden="true" fill="none">
+      <path d="M10.3 3.4a1 1 0 0 1 1.4-.5l.3.2a2 2 0 0 0 2 0l.3-.2a1 1 0 0 1 1.4.5l.5 1a2 2 0 0 0 1.5 1.1l1.1.2a1 1 0 0 1 .8 1.3l-.1.3a2 2 0 0 0 .4 2l.7.9a1 1 0 0 1 0 1.4l-.7.9a2 2 0 0 0-.4 2l.1.3a1 1 0 0 1-.8 1.3l-1.1.2a2 2 0 0 0-1.5 1.1l-.5 1a1 1 0 0 1-1.4.5l-.3-.2a2 2 0 0 0-2 0l-.3.2a1 1 0 0 1-1.4-.5l-.5-1a2 2 0 0 0-1.5-1.1l-1.1-.2a1 1 0 0 1-.8-1.3l.1-.3a2 2 0 0 0-.4-2l-.7-.9a1 1 0 0 1 0-1.4l.7-.9a2 2 0 0 0 .4-2l-.1-.3a1 1 0 0 1 .8-1.3l1.1-.2A2 2 0 0 0 9.8 5l.5-1Z" stroke="currentColor" strokeWidth="1.5" />
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
 // ── Confidence badge ──────────────────────────────────────────────────────────
 function confidenceTooltip(c: ConfidenceObject): string {
   const f = c.factors;
@@ -231,7 +272,9 @@ function SourceCard({ row, idx, onClick }: { row: SourceRow; idx: number; onClic
 function TypingIndicator() {
   return (
     <div className="typing-row">
-      <div className="msg-avatar assistant">SR</div>
+      <div className="msg-avatar assistant" aria-hidden="true">
+        <span className="sigil" />
+      </div>
       <div className="typing-bubble">
         <div className="t-dot" />
         <div className="t-dot" />
@@ -791,7 +834,27 @@ function resolveUpdater<T>(next: T | ((prev: T) => T), prev: T): T {
   return typeof next === 'function' ? (next as (prev: T) => T)(prev) : next;
 }
 
-function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
+function StudioPage({
+  onNavigateEval,
+  onNavigateHome,
+  authAvailable,
+  signedIn,
+  userLabel,
+  onSignIn,
+  onSignOut,
+  theme,
+  onToggleTheme,
+}: {
+  onNavigateEval: () => void;
+  onNavigateHome: () => void;
+  authAvailable: boolean;
+  signedIn: boolean;
+  userLabel?: string | null;
+  onSignIn: () => void;
+  onSignOut: () => void;
+  theme: ThemeMode;
+  onToggleTheme: () => void;
+}) {
   const [docs, setDocs] = useState<DocumentRow[]>([]);
   const [sessions, setSessions] = useState<StudioSession[]>([INITIAL_SESSION]);
   const [activeSessionId, setActiveSessionId] = useState<string>(INITIAL_SESSION.id);
@@ -802,6 +865,7 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
   const [dragActive, setDragActive] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<{ text: string; state: 'idle' | 'uploading' | 'done' | 'err' }>({ text: '', state: 'idle' });
   const [uploadPct, setUploadPct] = useState(0);
+  const [showSettings, setShowSettings] = useState(false);
   const [preserveMemory, setPreserveMemory] = useState<boolean>(() => {
     try {
       return localStorage.getItem(MEMORY_PREF_KEY) !== 'off';
@@ -809,6 +873,9 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
       return true;
     }
   });
+
+  const [sidebarTab, setSidebarTab] = useState<'chats' | 'library'>('library');
+  const [pendingBatchDelete, setPendingBatchDelete] = useState(false);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -875,7 +942,7 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
   useEffect(() => {
     if (!preserveMemory) return;
     try {
-      const raw = sessionStorage.getItem(STORAGE_KEY);
+      const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       const s = JSON.parse(raw);
       if (Array.isArray(s.sessions) && s.sessions.length) {
@@ -915,7 +982,7 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
   useEffect(() => {
     if (!preserveMemory) return;
     try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ sessions, activeSessionId }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ sessions, activeSessionId }));
     } catch {}
   }, [sessions, activeSessionId, preserveMemory]);
 
@@ -923,7 +990,7 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
     try {
       localStorage.setItem(MEMORY_PREF_KEY, preserveMemory ? 'on' : 'off');
       if (!preserveMemory) {
-        sessionStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(STORAGE_KEY);
       }
     } catch {}
   }, [preserveMemory]);
@@ -946,6 +1013,20 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
   };
 
   useEffect(() => { refreshDocs(); }, []);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        textareaRef.current?.focus();
+      }
+      if (e.key === 'Escape' && document.activeElement === textareaRef.current) {
+        setInput('');
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   useEffect(() => {
     if (!docs.some((d) => d.status === 'processing')) return;
@@ -1016,6 +1097,31 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
     setInput('');
     setError('');
     setLoading(false);
+  };
+
+  const deleteSession = (sessionId: string) => {
+    setSessions((prev) => {
+      const next = prev.filter((s) => s.id !== sessionId);
+      if (next.length === 0) {
+        const fresh = createStudioSession();
+        setActiveSessionId(fresh.id);
+        return [fresh];
+      }
+      if (sessionId === activeSessionId) {
+        setActiveSessionId(next[0].id);
+      }
+      return next;
+    });
+  };
+
+  const handleBatchDelete = async () => {
+    if (!selectedDocs.length) return;
+    const toDelete = [...selectedDocs];
+    setPendingBatchDelete(false);
+    setSelectedDocs([]);
+    setActiveEvidence({ citations: [], trace: [] });
+    await Promise.all(toDelete.map((id) => api.deleteDoc(id).catch(() => {})));
+    refreshDocs();
   };
 
   const ask = async (text: string, skipEnrichment = false, sense?: string) => {
@@ -1110,7 +1216,7 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
     setError('');
     setLoading(false);
     try {
-      sessionStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(STORAGE_KEY);
     } catch {}
   };
 
@@ -1126,6 +1232,37 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
   };
 
   const quickAsk = (prompt: string) => ask(prompt, true);
+
+  const exportChat = () => {
+    if (!messages.length) return;
+    const title = activeSession.title !== DEFAULT_SESSION_TITLE ? activeSession.title : 'ScholarRAG Chat';
+    const lines: string[] = [`# ${title}\n\n*Exported from ScholarRAG — ${new Date().toLocaleDateString()}*\n\n---\n`];
+    messages.forEach((m) => {
+      if (m.role === 'you') lines.push(`**You:** ${m.text}\n`);
+      else lines.push(`**ScholarRAG:** ${m.text}${m.citations?.length ? `\n\n*${m.citations.length} source(s) cited*` : ''}\n`);
+      lines.push('');
+    });
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${title.replace(/[^a-z0-9]/gi, '_').slice(0, 60)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setShowSettings(false);
+  };
+
+  const clearAllSessions = () => {
+    if (!window.confirm('Delete all sessions and start fresh? This cannot be undone.')) return;
+    const fresh = createStudioSession();
+    setSessions([fresh]);
+    setActiveSessionId(fresh.id);
+    setInput('');
+    setError('');
+    setLoading(false);
+    setShowSettings(false);
+  };
+
   const activeSessionTitle = activeSession.title !== DEFAULT_SESSION_TITLE
     ? activeSession.title
     : 'Chat with your research';
@@ -1197,7 +1334,9 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
       {/* ── Sidebar ── */}
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <div className="brand-icon">SR</div>
+          <div className="brand-icon" aria-hidden="true">
+            <span className="sigil" />
+          </div>
           <div className="brand-text">
             <div className="brand-name">ScholarRAG</div>
             <div className="brand-sub">Research assistant</div>
@@ -1205,187 +1344,163 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
         </div>
 
         <div className="sidebar-body">
-          <div className="sidebar-section">
-            <div className="sidebar-label">
-              <span>Workspace</span>
-              <span>
-                {processedCount} ready{processingCount ? ` · ${processingCount} processing` : ''}
-              </span>
-            </div>
-            <div className="workspace-card">
-              <div className="workspace-card-head">
-                <div className="workspace-card-title">Research workspace</div>
-                <span className="workspace-card-chip">{orderedSessions.length} chats</span>
-              </div>
-              <div className="workspace-card-copy">
-                Keep documents on the left, work in sessions, and inspect grounding evidence on the right.
-              </div>
-              <div className="workspace-card-metrics">
-                <div className="workspace-metric">
-                  <span className="workspace-metric-value">{processedCount}</span>
-                  <span className="workspace-metric-label">Ready docs</span>
-                </div>
-                <div className="workspace-metric">
-                  <span className="workspace-metric-value">{orderedSessions.length}</span>
-                  <span className="workspace-metric-label">Chat sessions</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="sidebar-section">
-            <div className="sidebar-label">
-              <span>Chats</span>
-              <button className="sidebar-inline-action" onClick={startNewChat}>+ New</button>
-            </div>
-            <div className="chat-session-list">
-              {orderedSessions.map((session) => {
-                const isActive = session.id === activeSessionId;
-                const turnCount = session.messages.filter((m) => m.role === 'you').length;
-                return (
-                  <button
-                    key={session.id}
-                    className={`chat-session-item${isActive ? ' active' : ''}`}
-                    onClick={() => {
-                      setActiveSessionId(session.id);
-                      setInput('');
-                      setError('');
-                      setLoading(false);
-                    }}
-                  >
-                    <div className="chat-session-title-row">
-                      <span className="chat-session-title">{session.title}</span>
-                      {isActive && <span className="chat-session-pill">Open</span>}
-                    </div>
-                    <div className="chat-session-meta">
-                      {turnCount ? `${turnCount} prompts` : 'Empty chat'}
-                      {session.selectedDocs.length ? ` · ${session.selectedDocs.length} doc${session.selectedDocs.length > 1 ? 's' : ''}` : ''}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="sidebar-section">
-            <div className="sidebar-label">
-              <span>Session</span>
-              <span>{preserveMemory ? 'saved' : 'ephemeral'}</span>
-            </div>
-            <div className="session-card">
-              <div className="session-card-copy">
-                Keep the current chat across refreshes, or turn memory off for a temporary scratch session.
-              </div>
-              <div className="session-actions">
-                <button
-                  className={`session-toggle${preserveMemory ? ' active' : ''}`}
-                  onClick={() => setPreserveMemory((prev) => !prev)}
-                  aria-pressed={preserveMemory}
-                  type="button"
-                >
-                  <span className="session-toggle-track">
-                    <span className="session-toggle-thumb" />
-                  </span>
-                  <span>{preserveMemory ? 'Memory on' : 'Memory off'}</span>
-                </button>
-                <button
-                  className="session-clear"
-                  onClick={forgetMemoryNow}
-                  disabled={messages.length === 0}
-                  type="button"
-                >
-                  Clear chat
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Upload zone */}
-          <div className="sidebar-section">
-            <div className="sidebar-label"><span>Upload</span><span>PDF / TXT</span></div>
-            <div
-              className={`upload-zone${dragActive ? ' drag-active' : ''}`}
-              onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
-              onDragLeave={() => setDragActive(false)}
-              onDrop={(e) => { e.preventDefault(); setDragActive(false); handleFiles(e.dataTransfer.files); }}
-              onClick={() => document.getElementById('sr-upload')?.click()}
+          {/* ── Tab nav ── */}
+          <div className="sb-tabs">
+            <button
+              className={`sb-tab${sidebarTab === 'chats' ? ' active' : ''}`}
+              onClick={() => setSidebarTab('chats')}
             >
-              <div className="upload-icon">📄</div>
-              <div className="upload-text">Drop files or <strong>browse</strong></div>
-              <input
-                id="sr-upload"
-                type="file"
-                accept=".pdf,.txt,.md"
-                multiple
-                style={{ display: 'none' }}
-                onChange={(e) => handleFiles(e.target.files)}
-              />
-            </div>
-            {uploadStatus.state !== 'idle' && (
-              <div className={`upload-status ${uploadStatus.state}`}>
-                {uploadStatus.state === 'uploading' && (
-                  <span style={{
-                    display: 'inline-block', width: 10, height: 10, borderRadius: '50%',
-                    border: '1.5px solid var(--cyan)', borderTopColor: 'transparent',
-                    animation: 'spin 0.7s linear infinite',
-                  }} />
-                )}
-                {uploadStatus.state === 'done' && '✓'}
-                {uploadStatus.state === 'err' && '✕'}
-                {uploadStatus.text}
-              </div>
-            )}
-            {uploadStatus.state === 'uploading' && (
-              <div className="upload-bar">
-                <div className="upload-bar-fill" style={{ width: `${uploadPct}%` }} />
-              </div>
-            )}
+              Chats
+              {orderedSessions.length > 0 && <span className="sb-tab-count">{orderedSessions.length}</span>}
+            </button>
+            <button
+              className={`sb-tab${sidebarTab === 'library' ? ' active' : ''}`}
+              onClick={() => setSidebarTab('library')}
+            >
+              Library
+              {dedupedDocs.length > 0 && <span className="sb-tab-count">{dedupedDocs.length}</span>}
+            </button>
           </div>
 
-          {/* Documents */}
-          <div className="sidebar-section">
-            <div className="sidebar-label">
-              <span>Documents</span>
-              {selectedDocs.length > 0 && (
-                <span style={{ color: 'var(--indigo)' }}>{selectedDocs.length} selected</span>
-              )}
-            </div>
-            {dedupedDocs.length === 0 ? (
-              <div className="doc-empty">
-                <div className="doc-empty-icon">📂</div>
-                <div>No documents yet.<br />Upload a PDF to begin.</div>
+          {sidebarTab === 'chats' ? (
+            <div className="sb-panel">
+              {/* New session + compact stats */}
+              <div className="sb-chats-top">
+                <button className="sb-new-chat" onClick={startNewChat}>
+                  <span className="sb-new-chat-plus">+</span> New session
+                </button>
+                <div className="sb-stats">
+                  <span>{processedCount}d</span>
+                  <span className="sb-stats-dot">·</span>
+                  <span>{orderedSessions.length}s</span>
+                </div>
               </div>
-            ) : (
-              <div className="doc-list">
-                {dedupedDocs.map((d) => {
-                  const sel = selectedDocs.includes(d.id);
-                  const badgeCls = d.status === 'ready' ? 'ready' : d.status === 'error' ? 'error' : 'processing';
-                  const badgeText = d.status === 'ready' ? 'Ready' : d.status === 'error' ? 'Error' : 'Processing…';
+
+              {/* Session list */}
+              <div className="sb-session-list">
+                {orderedSessions.map((session) => {
+                  const isActive = session.id === activeSessionId;
+                  const turnCount = session.messages.filter((m) => m.role === 'you').length;
                   return (
-                    <div
-                      key={d.id}
-                      className={`doc-item${sel ? ' selected' : ''}`}
-                      onClick={() => toggleDoc(d.id)}
-                    >
-                      <div className="doc-check">{sel ? '✓' : ''}</div>
-                      <div className="doc-icon">📝</div>
-                      <div className="doc-info">
-                        <div className="doc-name" title={d.title}>{d.title}</div>
-                        <div className="doc-status-row">
-                          <span className={`doc-badge ${badgeCls}`}>{badgeText}</span>
-                        </div>
-                      </div>
+                    <div key={session.id} className={`sb-session${isActive ? ' active' : ''}`}>
                       <button
-                        className="doc-del"
-                        title="Delete document"
-                        onClick={(e) => { e.stopPropagation(); setPendingDelete(d); }}
+                        className="sb-session-btn"
+                        onClick={() => { setActiveSessionId(session.id); setInput(''); setError(''); setLoading(false); }}
+                      >
+                        <span className="sb-session-title">{session.title}</span>
+                        <span className="sb-session-meta">
+                          {turnCount ? `${turnCount} msg${turnCount > 1 ? 's' : ''}` : 'Empty'}
+                          {session.selectedDocs.length ? ` · ${session.selectedDocs.length}d` : ''}
+                        </span>
+                      </button>
+                      <button
+                        className="sb-session-del"
+                        title="Delete session"
+                        onClick={(e) => { e.stopPropagation(); deleteSession(session.id); }}
                       >✕</button>
                     </div>
                   );
                 })}
               </div>
-            )}
-          </div>
+
+            </div>
+          ) : (
+            <div className="sb-panel">
+              {/* Upload dropzone */}
+              <div
+                className={`sb-upload${dragActive ? ' over' : ''}`}
+                onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+                onDragLeave={() => setDragActive(false)}
+                onDrop={(e) => { e.preventDefault(); setDragActive(false); handleFiles(e.dataTransfer.files); }}
+                onClick={() => document.getElementById('sr-upload')?.click()}
+              >
+                <input
+                  id="sr-upload"
+                  type="file"
+                  accept=".pdf,.txt,.md"
+                  multiple
+                  style={{ display: 'none' }}
+                  onChange={(e) => handleFiles(e.target.files)}
+                />
+                {uploadStatus.state === 'uploading' ? (
+                  <div className="sb-upload-progress">
+                    <div className="sb-upload-bar">
+                      <div className="sb-upload-fill" style={{ width: `${uploadPct}%` }} />
+                    </div>
+                    <span className="sb-upload-label">{uploadStatus.text}</span>
+                  </div>
+                ) : (
+                  <div className="sb-upload-idle">
+                    <div className="sb-upload-icon">
+                      {uploadStatus.state === 'done' ? '✓' : uploadStatus.state === 'err' ? '!' : '↑'}
+                    </div>
+                    <span className="sb-upload-label">
+                      {uploadStatus.state === 'done' ? uploadStatus.text
+                        : uploadStatus.state === 'err' ? uploadStatus.text
+                        : 'Drop files or browse'}
+                    </span>
+                    <span className="sb-upload-hint">PDF · TXT · MD · multiple files</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Library header */}
+              {dedupedDocs.length > 0 && (
+                <div className="sb-lib-bar">
+                  <label className="sb-lib-check-all">
+                    <input
+                      type="checkbox"
+                      checked={dedupedDocs.length > 0 && dedupedDocs.every((d) => selectedDocs.includes(d.id))}
+                      onChange={(e) => setSelectedDocs(
+                        e.target.checked
+                          ? dedupedDocs.filter((d) => d.status === 'ready').map((d) => d.id)
+                          : []
+                      )}
+                    />
+                    <span>{dedupedDocs.length} doc{dedupedDocs.length !== 1 ? 's' : ''}</span>
+                  </label>
+                  {selectedDocs.length > 0 && (
+                    <button className="sb-lib-del" onClick={() => setPendingBatchDelete(true)}>
+                      Delete {selectedDocs.length}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Doc list */}
+              {dedupedDocs.length === 0 ? (
+                <div className="sb-empty">
+                  <div className="sb-empty-icon">📂</div>
+                  <span>No documents yet</span>
+                  <span className="sb-empty-hint">Upload a PDF to get started</span>
+                </div>
+              ) : (
+                <div className="sb-doc-list">
+                  {dedupedDocs.map((d) => {
+                    const sel = selectedDocs.includes(d.id);
+                    const isReady = d.status === 'ready';
+                    const isError = d.status === 'error';
+                    return (
+                      <div key={d.id} className={`sb-doc${sel ? ' sel' : ''}`} onClick={() => toggleDoc(d.id)}>
+                        <div className={`sb-doc-check${sel ? ' on' : ''}`} />
+                        <div className="sb-doc-body">
+                          <span className="sb-doc-name" title={d.title}>{d.title}</span>
+                          <span className={`sb-doc-status${isReady ? ' ready' : isError ? ' err' : ' proc'}`}>
+                            {isReady ? 'Ready' : isError ? 'Error' : 'Processing…'}
+                          </span>
+                        </div>
+                        <button
+                          className="sb-doc-del"
+                          title="Delete"
+                          onClick={(e) => { e.stopPropagation(); setPendingDelete(d); }}
+                        >✕</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="sidebar-footer">
@@ -1400,31 +1515,25 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
       <div className="main-content">
         <div className="topbar">
           <div className="topbar-left">
-            <div className="topbar-kicker">Research workspace</div>
-            <div className="topbar-title-row">
-              <div className="topbar-title">
+            <div className="topbar-breadcrumb">
+              <span className="topbar-kicker">Research workspace</span>
+              <span className="topbar-sep" aria-hidden="true">›</span>
+              <span className="topbar-title">
                 {hasMulti
                   ? `${selectedRows.length} documents selected`
                   : (activeDoc ? activeDoc.title : activeSessionTitle)}
-              </div>
+              </span>
               {selectedRows.length > 0 && (
                 <span className="topbar-state-pill">
-                  {hasMulti ? 'Cross-document' : 'Grounded doc mode'}
+                  {hasMulti ? 'Cross-document' : 'Grounded'}
                 </span>
               )}
             </div>
-            <div className="topbar-sub">
-              {hasMulti
-                ? 'Ask comparative questions, extract shared evidence, or compare claims across the selected files.'
-                : (activeDoc
-                  ? 'Use the selected document as the only answer context in docs mode.'
-                  : 'Start a session, switch modes deliberately, and inspect the evidence in the panel on the right.')}
-            </div>
           </div>
           <div className="topbar-right">
-            <div className="topbar-control-block">
+            <div className="topbar-control-block workspace-mode-block">
               <div className="topbar-control-label">Mode</div>
-              <div className="seg-toggle">
+              <div className="seg-toggle workspace-seg-toggle">
                 <button
                   className={!allowGeneralBackground ? 'active' : ''}
                   onClick={() => setAllowGeneralBackground(false)}
@@ -1433,6 +1542,110 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
                   className={allowGeneralBackground ? 'active' : ''}
                   onClick={() => setAllowGeneralBackground(true)}
                 >Public research</button>
+              </div>
+            </div>
+            <div className="workspace-toolbar">
+              <button className="workspace-toolbar-btn" onClick={onNavigateHome}>
+                <HomeIcon />
+                <span>Home</span>
+              </button>
+              <div className="workspace-settings">
+                <button
+                  className={`workspace-toolbar-btn workspace-toolbar-btn-settings${showSettings ? ' active' : ''}`}
+                  onClick={() => setShowSettings((value) => !value)}
+                >
+                  <SettingsIcon />
+                  <span>Settings</span>
+                </button>
+                {showSettings && (
+                  <div className="workspace-settings-menu">
+                    <div className="workspace-settings-section">
+                      <div className="workspace-settings-label">Appearance</div>
+                      <div className="workspace-settings-chip-row">
+                        <button
+                          className={`workspace-settings-chip${theme === 'dark' ? ' active' : ''}`}
+                          type="button"
+                          onClick={() => {
+                            if (theme !== 'dark') onToggleTheme();
+                          }}
+                        >
+                          Dark
+                        </button>
+                        <button
+                          className={`workspace-settings-chip${theme === 'light' ? ' active' : ''}`}
+                          type="button"
+                          onClick={() => {
+                            if (theme !== 'light') onToggleTheme();
+                          }}
+                        >
+                          Light
+                        </button>
+                      </div>
+                    </div>
+                    <div className="workspace-settings-section">
+                      <div className="workspace-settings-label">Session</div>
+                      <div className="workspace-settings-row">
+                        <div className="workspace-settings-row-copy">
+                          <strong>Session memory</strong>
+                          <span>{preserveMemory ? 'Persists across refreshes' : 'Clears when the tab closes'}</span>
+                        </div>
+                        <button
+                          className={`workspace-memory-toggle${preserveMemory ? ' on' : ''}`}
+                          onClick={() => setPreserveMemory((value) => !value)}
+                          aria-pressed={preserveMemory}
+                          type="button"
+                        >
+                          <span className="workspace-memory-track"><span className="workspace-memory-thumb" /></span>
+                        </button>
+                      </div>
+                      <button className="workspace-settings-action" onClick={forgetMemoryNow}>
+                        <span className="workspace-settings-icon">⌫</span>
+                        Clear current chat
+                      </button>
+                      <button
+                        className="workspace-settings-action"
+                        onClick={exportChat}
+                        disabled={messages.length === 0}
+                        title={messages.length === 0 ? 'No messages to export' : 'Download current chat as Markdown'}
+                      >
+                        <span className="workspace-settings-icon">↓</span>
+                        Export chat as Markdown
+                      </button>
+                      <button className="workspace-settings-action danger" onClick={clearAllSessions}>
+                        <span className="workspace-settings-icon">✕</span>
+                        Clear all sessions
+                      </button>
+                    </div>
+                    <div className="workspace-settings-section">
+                      <div className="workspace-settings-label">Keyboard shortcuts</div>
+                      <div className="workspace-settings-shortcuts">
+                        <div className="ws-shortcut"><kbd>Enter</kbd><span>Send message</span></div>
+                        <div className="ws-shortcut"><kbd>Shift+Enter</kbd><span>New line</span></div>
+                        <div className="ws-shortcut"><kbd>Ctrl+K</kbd><span>Focus input</span></div>
+                        <div className="ws-shortcut"><kbd>Esc</kbd><span>Clear input</span></div>
+                      </div>
+                    </div>
+                    {authAvailable && (
+                      <div className="workspace-settings-section">
+                        <div className="workspace-settings-label">Account</div>
+                        {signedIn ? (
+                          <>
+                            {userLabel ? <div className="workspace-settings-user">{userLabel}</div> : null}
+                            <button className="workspace-settings-action danger" onClick={() => { setShowSettings(false); onSignOut(); }}>
+                              <span className="workspace-settings-icon">⇠</span>
+                              Sign out
+                            </button>
+                          </>
+                        ) : (
+                          <button className="workspace-settings-action" onClick={() => { setShowSettings(false); onSignIn(); }}>
+                            <GoogleIcon />
+                            Sign in with Google
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1466,7 +1679,9 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
               <div className="chat-empty">
                 <div className="chat-empty-hero">
                   <div className="chat-empty-kicker">Grounded AI research assistant</div>
-                  <div className="chat-empty-logo">SR</div>
+                  <div className="chat-empty-logo" aria-hidden="true">
+                    <span className="sigil" />
+                  </div>
                   <div className="chat-empty-title">Ask better research questions</div>
                   <div className="chat-empty-sub">
                     {activeDoc
@@ -1506,7 +1721,11 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
             {messages.map((m, i) => (
               <div key={i} className="msg-group">
                 <div className={`bubble-row ${m.role}`}>
-                  {m.role === 'assistant' && <div className="msg-avatar assistant">SR</div>}
+                  {m.role === 'assistant' && (
+                    <div className="msg-avatar assistant" aria-hidden="true">
+                      <span className="sigil" />
+                    </div>
+                  )}
                   <div
                     className={`msg-bubble${m.role === 'assistant' && activeEvidenceMsgIdx === i ? ' active-evidence' : ''}`}
                     onClick={() => {
@@ -1634,6 +1853,25 @@ function StudioPage({ onNavigateEval }: { onNavigateEval: () => void }) {
         onCancel={() => setPendingDelete(null)}
         onConfirm={confirmDelete}
       />
+
+      {pendingBatchDelete && (
+        <div className="modal-backdrop" onClick={() => setPendingBatchDelete(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <div className="modal-head-title">Delete {selectedDocs.length} document{selectedDocs.length > 1 ? 's' : ''}?</div>
+              <button className="modal-close" onClick={() => setPendingBatchDelete(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <p>Remove <strong>{selectedDocs.length} selected document{selectedDocs.length > 1 ? 's' : ''}</strong> from your workspace?</p>
+              <p style={{ marginTop: 10 }}>All chunks and embeddings will be permanently deleted.</p>
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-ghost btn-sm" onClick={() => setPendingBatchDelete(false)}>Cancel</button>
+              <button className="btn btn-danger btn-sm" onClick={handleBatchDelete}>Delete all</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1648,6 +1886,13 @@ export default function App() {
         ? 'studio'
         : 'landing',
   );
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    try {
+      return localStorage.getItem('scholarrag_theme') === 'light' ? 'light' : 'dark';
+    } catch {
+      return 'dark';
+    }
+  });
   const [authSession, setAuthSession] = useState<SupabaseSession | null>(null);
   const [authUser, setAuthUser] = useState<SupabaseUser | null>(null);
 
@@ -1679,9 +1924,24 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, [supabase]);
 
+  useEffect(() => {
+    document.documentElement.classList.toggle('theme-light', theme === 'light');
+    try {
+      localStorage.setItem('scholarrag_theme', theme);
+    } catch {}
+  }, [theme]);
+
+  useEffect(() => {
+    document.body.dataset.page = page;
+    return () => {
+      delete document.body.dataset.page;
+    };
+  }, [page]);
+
   const goEval = () => { window.history.pushState({}, '', '/eval'); setPage('eval'); };
   const goStudio = () => { window.history.pushState({}, '', '/app'); setPage('studio'); };
   const goLanding = () => { window.history.pushState({}, '', '/'); setPage('landing'); };
+  const toggleTheme = () => setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
 
   const handleGoogleSignIn = async () => {
     if (!supabase) {
@@ -1708,11 +1968,25 @@ export default function App() {
         authAvailable={Boolean(supabase)}
         signedIn={Boolean(authSession)}
         userLabel={authUser?.email || authUser?.user_metadata?.full_name || null}
+        theme={theme}
+        onToggleTheme={toggleTheme}
         onOpenWorkspace={goStudio}
         onSignIn={handleGoogleSignIn}
         onSignOut={handleSignOut}
       />
     );
   }
-  return <StudioPage onNavigateEval={goEval} />;
+  return (
+    <StudioPage
+      onNavigateEval={goEval}
+      onNavigateHome={goLanding}
+      authAvailable={Boolean(supabase)}
+      signedIn={Boolean(authSession)}
+      userLabel={authUser?.email || authUser?.user_metadata?.full_name || null}
+      onSignIn={handleGoogleSignIn}
+      onSignOut={handleSignOut}
+      theme={theme}
+      onToggleTheme={toggleTheme}
+    />
+  );
 }

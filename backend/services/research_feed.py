@@ -60,10 +60,27 @@ def _iso_date_days_ago(days: int) -> str:
     return dt.date().isoformat()
 
 
-def _latest_openalex(topic: str | None, limit: int, days: int) -> list[dict[str, Any]]:
+def _latest_openalex(topic: str | None, limit: int, days: int, sort: str) -> list[dict[str, Any]]:
+    normalized_sort = _normalize_sort(sort)
+    if normalized_sort == "top_cited":
+        fetch_limit = max(24, min(limit * 5, 80))
+        lookback_days = max(days * 8, 720)
+        provider_sort = "cited_by_count:desc"
+        why_relevant = "Highly cited work from OpenAlex ranked by citation count."
+    elif normalized_sort == "trending":
+        fetch_limit = max(24, min(limit * 4, 72))
+        lookback_days = max(days * 3, 120)
+        provider_sort = "cited_by_count:desc"
+        why_relevant = "Recent OpenAlex work with strong citation activity."
+    else:
+        fetch_limit = max(18, min(limit * 3, 50))
+        lookback_days = max(1, days)
+        provider_sort = "publication_date:desc"
+        why_relevant = "Recent work from OpenAlex ordered by publication date."
+
     params: dict[str, str] = {
-        "per-page": str(max(1, min(limit * 2, 50))),
-        "sort": "publication_date:desc",
+        "per-page": str(fetch_limit),
+        "sort": provider_sort,
         "select": ",".join(
             [
                 "id",
@@ -83,7 +100,7 @@ def _latest_openalex(topic: str | None, limit: int, days: int) -> list[dict[str,
     if openalex_key:
         params["api_key"] = openalex_key
 
-    filters = [f"from_publication_date:{_iso_date_days_ago(days)}"]
+    filters = [f"from_publication_date:{_iso_date_days_ago(lookback_days)}"]
     topic_value = _normalize_topic(topic) or DEFAULT_DISCOVERY_TOPIC
     if topic_value:
         params["search"] = topic_value
@@ -116,18 +133,22 @@ def _latest_openalex(topic: str | None, limit: int, days: int) -> list[dict[str,
                 "doi": work.get("doi"),
                 "citation_count": work.get("cited_by_count") or 0,
                 "topics": [c.get("display_name") for c in work.get("concepts", [])[:5] if c.get("display_name")],
-                "why_relevant": "Recent work from OpenAlex ordered by publication date.",
+                "why_relevant": why_relevant,
             }
         )
     return results
 
 
-def _latest_arxiv(topic: str | None, limit: int, days: int) -> list[dict[str, Any]]:
+def _latest_arxiv(topic: str | None, limit: int, days: int, sort: str) -> list[dict[str, Any]]:
+    normalized_sort = _normalize_sort(sort)
+    if normalized_sort == "top_cited":
+        return []
+
     query = _normalize_topic(topic) or "cat:cs.AI OR cat:cs.LG OR cat:cs.CL OR cat:cs.CV"
     params = {
         "search_query": query,
         "start": 0,
-        "max_results": max(1, min(limit * 2, 25)),
+        "max_results": max(1, min(limit * (3 if normalized_sort == "trending" else 2), 30)),
         "sortBy": "submittedDate",
         "sortOrder": "descending",
     }
@@ -176,7 +197,9 @@ def _latest_arxiv(topic: str | None, limit: int, days: int) -> list[dict[str, An
                 "doi": entry.findtext("atom:doi", default="", namespaces=ns) or None,
                 "citation_count": 0,
                 "topics": [c.attrib.get("term") for c in entry.findall("atom:category", ns)[:5] if c.attrib.get("term")],
-                "why_relevant": "Recent preprint from arXiv ordered by submission date.",
+                "why_relevant": "Recent preprint from arXiv ordered by submission date."
+                if normalized_sort == "latest"
+                else "Recent arXiv preprint with strong topic overlap.",
             }
         )
         if len(results) >= limit:
@@ -211,7 +234,7 @@ def _published_timestamp(row: dict[str, Any]) -> float:
 def _age_days(row: dict[str, Any]) -> float:
     ts = _published_timestamp(row)
     if not ts:
-      return 9999.0
+        return 9999.0
     delta = max(time.time() - ts, 1.0)
     return delta / 86400.0
 
@@ -244,8 +267,8 @@ def latest_research_feed(topic: str | None = None, limit: int = 8, days: int = 4
         return cached[1]
 
     providers = {
-        "openalex": lambda: _latest_openalex(normalized_topic or None, capped_limit, capped_days),
-        "arxiv": lambda: _latest_arxiv(normalized_topic or None, capped_limit, capped_days),
+        "openalex": lambda: _latest_openalex(normalized_topic or None, capped_limit, capped_days, normalized_sort),
+        "arxiv": lambda: _latest_arxiv(normalized_topic or None, capped_limit, capped_days, normalized_sort),
     }
     provider_status: dict[str, dict[str, Any]] = {}
     rows: list[dict[str, Any]] = []

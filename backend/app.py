@@ -1742,8 +1742,9 @@ def research_latest(
     topic: str | None = Query(default=None, description="Optional research topic"),
     limit: int = Query(default=8, ge=1, le=24),
     days: int = Query(default=45, ge=1, le=365),
+    sort: str = Query(default="latest", description="latest | trending | top_cited"),
 ):
-    return latest_research_feed(topic=topic, limit=limit, days=days)
+    return latest_research_feed(topic=topic, limit=limit, days=days, sort=sort)
 
 @app.get("/feed/latest")
 def latest_papers(limit: int = 10):
