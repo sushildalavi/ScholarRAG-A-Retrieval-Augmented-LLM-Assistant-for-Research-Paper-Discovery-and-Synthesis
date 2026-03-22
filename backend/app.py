@@ -83,7 +83,7 @@ from backend.sense_resolver import resolve_sense, filter_citations_by_sense
 import statistics
 
 # Initialize FastAPI app
-app = FastAPI(title="ScholarRAG API", version="1.0")
+app = FastAPI(title="ScholarRAG: Scholarly Retrieval-Augmented Generation System", version="1.0")
 
 _cors_env = os.environ.get("CORS_ORIGINS", "")
 _cors_origins = (
