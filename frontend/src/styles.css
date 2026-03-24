@@ -3302,6 +3302,19 @@ input, textarea, select { font: inherit; color: inherit; }
 }
 .eval-card textarea:focus { border-color: var(--border-focus); }
 
+.eval-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.eval-hint {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.4;
+}
+
 .eval-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .eval-table th {
   text-align: left; padding: 6px 10px;

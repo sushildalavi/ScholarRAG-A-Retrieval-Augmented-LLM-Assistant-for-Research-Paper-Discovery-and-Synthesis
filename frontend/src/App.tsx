@@ -10,6 +10,12 @@ import {
   MsaCalibrationPayload, MsaCalibrationResponse, MsaCalibrationLatest,
 } from './api/types';
 import { LandingPage } from './components/LandingPage';
+import {
+  DEFAULT_EVAL_PRESET_COUNT,
+  buildJudgePresetCases,
+  buildRetrievalPresetCases,
+  selectPresetDocuments,
+} from './lib/evalPresets';
 import { getSupabaseClient } from './lib/supabase';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -580,6 +586,7 @@ function EvalPage({ onBack }: { onBack: () => void }) {
   const [k, setK] = useState(10);
   const [rawCases, setRawCases] = useState('[\n  {"query":"DES key size", "expected_doc_id": 48}\n]');
   const [running, setRunning] = useState(false);
+  const [presetLoading, setPresetLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<EvalRunResponse | null>(null);
   const [runs, setRuns] = useState<EvalRunResponse[]>([]);
@@ -588,6 +595,7 @@ function EvalPage({ onBack }: { onBack: () => void }) {
   const [judgeK, setJudgeK] = useState(10);
   const [judgeRaw, setJudgeRaw] = useState('[\n  {"query":"What is the main contribution?", "scope":"uploaded"}\n]');
   const [judgeRunning, setJudgeRunning] = useState(false);
+  const [judgePresetLoading, setJudgePresetLoading] = useState(false);
   const [judgeError, setJudgeError] = useState('');
   const [judgeResult, setJudgeResult] = useState<JudgeRunResponse | null>(null);
   const [judgeRuns, setJudgeRuns] = useState<JudgeRunSummary[]>([]);
@@ -603,6 +611,39 @@ function EvalPage({ onBack }: { onBack: () => void }) {
     api.listJudgeRuns(20).then((r) => setJudgeRuns(r.runs || [])).catch(() => undefined);
     api.getLatestCalibration().then((r) => setCalibLatest(r || null)).catch(() => undefined);
   }, []);
+
+  const loadPresetDocs = async (): Promise<DocumentRow[]> => {
+    const res = await api.listDocs(100);
+    const selected = selectPresetDocuments(res.documents || []);
+    if (!selected.length) {
+      throw new Error('No ready uploaded documents found for preset generation.');
+    }
+    return selected;
+  };
+
+  const loadEvalPreset = async () => {
+    setError(''); setPresetLoading(true);
+    try {
+      const docs = await loadPresetDocs();
+      const cases = buildRetrievalPresetCases(docs, DEFAULT_EVAL_PRESET_COUNT);
+      if (!cases.length) throw new Error('Unable to build retrieval cases from the current documents.');
+      setName(`Uploaded ${cases.length}-query eval`);
+      setRawCases(JSON.stringify(cases, null, 2));
+    } catch (e: any) { setError(e?.message || 'Failed to load retrieval preset'); }
+    finally { setPresetLoading(false); }
+  };
+
+  const loadJudgePreset = async () => {
+    setJudgeError(''); setJudgePresetLoading(true);
+    try {
+      const docs = await loadPresetDocs();
+      const cases = buildJudgePresetCases(docs, DEFAULT_EVAL_PRESET_COUNT);
+      if (!cases.length) throw new Error('Unable to build judge cases from the current documents.');
+      setJudgeScope('uploaded');
+      setJudgeRaw(JSON.stringify(cases, null, 2));
+    } catch (e: any) { setJudgeError(e?.message || 'Failed to load judge preset'); }
+    finally { setJudgePresetLoading(false); }
+  };
 
   const runEval = async () => {
     setError(''); setRunning(true);
@@ -661,8 +702,14 @@ function EvalPage({ onBack }: { onBack: () => void }) {
           <label>Top K</label>
           <input type="number" value={judgeK} onChange={(e) => setJudgeK(Number(e.target.value) || 10)} />
           <label>Test cases JSON</label>
+          <div className="eval-actions">
+            <button className="btn btn-ghost btn-sm" onClick={loadJudgePreset} disabled={judgeRunning || judgePresetLoading}>
+              {judgePresetLoading ? 'Loading preset…' : `Load ${DEFAULT_EVAL_PRESET_COUNT}-query synthesis preset`}
+            </button>
+            <span className="eval-hint">Builds uploaded-scope single-doc and multi-doc synthesis prompts from ready docs.</span>
+          </div>
           <textarea rows={8} value={judgeRaw} onChange={(e) => setJudgeRaw(e.target.value)} />
-          <button className="btn btn-primary btn-sm" onClick={runJudge} disabled={judgeRunning}>
+          <button className="btn btn-primary btn-sm" onClick={runJudge} disabled={judgeRunning || judgePresetLoading}>
             {judgeRunning ? 'Running…' : 'Run judge eval'}
           </button>
           {judgeError && <div className="alert">{judgeError}</div>}
@@ -702,8 +749,14 @@ function EvalPage({ onBack }: { onBack: () => void }) {
           <label>Top K</label>
           <input type="number" value={k} onChange={(e) => setK(Number(e.target.value) || 10)} />
           <label>Test cases JSON</label>
+          <div className="eval-actions">
+            <button className="btn btn-ghost btn-sm" onClick={loadEvalPreset} disabled={running || presetLoading}>
+              {presetLoading ? 'Loading preset…' : `Load ${DEFAULT_EVAL_PRESET_COUNT}-query retrieval preset`}
+            </button>
+            <span className="eval-hint">Anchors each query to the uploaded document title and expected doc id.</span>
+          </div>
           <textarea rows={8} value={rawCases} onChange={(e) => setRawCases(e.target.value)} />
-          <button className="btn btn-primary btn-sm" onClick={runEval} disabled={running}>
+          <button className="btn btn-primary btn-sm" onClick={runEval} disabled={running || presetLoading}>
             {running ? 'Running…' : 'Run evaluation'}
           </button>
           {error && <div className="alert">{error}</div>}

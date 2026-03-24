@@ -1,0 +1,338 @@
+{
+  "_schema_note": "Feed this file to POST /eval/judge as the 'cases' array. All doc_id / doc_ids values are null until you run scripts/apply_doc_ids.py. Single-doc cases use doc_id (int); multi-doc cases use doc_ids (list of ints). The endpoint accepts both fields and passes them to assistant_answer().",
+  "_endpoint": "POST /eval/judge",
+  "_required_payload_wrapper": {
+    "scope": "uploaded",
+    "k": 10,
+    "run_judge_llm": true,
+    "cases": "<this_array>"
+  },
+  "_judge_output_fields": {
+    "per_case": ["query", "answer", "citations", "faithfulness", "doc_id", "doc_ids", "scope"],
+    "faithfulness_fields": ["overall_score", "citation_coverage", "supported_count", "unsupported_count", "sentence_count", "claims", "unsupported", "method"],
+    "claim_fields": ["sentence_id", "sentence", "supported (bool)", "evidence_ids", "reason"],
+    "aggregate": ["mean_overall_score", "mean_coverage", "unsupported_total", "count"]
+  },
+  "cases": [
+    {
+      "id": 81,
+      "judge_type": "single",
+      "_doc_key": "rag",
+      "query": "Synthesize the argument in the RAG paper for why combining parametric and non-parametric memory improves knowledge-intensive QA — and what evidence does the paper provide?",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 82,
+      "judge_type": "single",
+      "_doc_key": "rag",
+      "query": "Using 'Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks', explain how the paper distinguishes between tasks where retrieval helps most versus tasks where it helps least.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 83,
+      "judge_type": "single",
+      "_doc_key": "rag",
+      "query": "Based on the RAG paper, provide an evidence-grounded explanation of how retrieved passages are incorporated during the generation process in RAG-Token.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 84,
+      "judge_type": "single",
+      "_doc_key": "llm_judge",
+      "query": "Synthesize the main argument in 'Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena' about when LLM judges are and are not reliable substitutes for human evaluation.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 85,
+      "judge_type": "single",
+      "_doc_key": "llm_judge",
+      "query": "Using 'Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena', explain each bias identified in LLM judge behavior and what the paper recommends to mitigate them.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 86,
+      "judge_type": "single",
+      "_doc_key": "llm_judge",
+      "query": "Provide an evidence-grounded summary of the Chatbot Arena methodology and its stated advantages over fixed benchmark evaluation.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 87,
+      "judge_type": "single",
+      "_doc_key": "instructgpt",
+      "query": "Synthesize the InstructGPT paper's case for why RLHF outperforms supervised fine-tuning alone for improving instruction following.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 88,
+      "judge_type": "single",
+      "_doc_key": "instructgpt",
+      "query": "Using the InstructGPT paper, explain the concept of the alignment tax and how the paper attempts to reduce it through a pretraining data mixture during PPO.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 89,
+      "judge_type": "single",
+      "_doc_key": "instructgpt",
+      "query": "Based on the InstructGPT paper, what risks of RLHF-based alignment does the paper acknowledge and what do the authors say about mitigating them?",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 90,
+      "judge_type": "single",
+      "_doc_key": "factscore",
+      "query": "Synthesize the FActScore paper's argument for why atomic-claim-level evaluation of factual precision is more informative than sentence-level or passage-level metrics.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 91,
+      "judge_type": "single",
+      "_doc_key": "factscore",
+      "query": "Using FActScore, explain how the choice of knowledge source—Wikipedia retrieval versus a prompted LM—affects factuality scores across different generation models.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 92,
+      "judge_type": "single",
+      "_doc_key": "factscore",
+      "query": "Based on FActScore, what are the main patterns of factual hallucination observed across large language models on biographical generation tasks?",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 93,
+      "judge_type": "single",
+      "_doc_key": "bert",
+      "query": "Synthesize BERT's technical contribution — specifically why deeply bidirectional pre-training improves downstream NLP tasks compared to shallow bidirectional or unidirectional alternatives.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 94,
+      "judge_type": "single",
+      "_doc_key": "bert",
+      "query": "Using the BERT paper, explain the design choices behind Next Sentence Prediction and what the ablation study reveals about its actual contribution to downstream performance.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 95,
+      "judge_type": "single",
+      "_doc_key": "bert",
+      "query": "Provide an evidence-grounded summary of how BERT fine-tunes for extractive question answering and what the paper shows about task-specific versus general representations.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 96,
+      "judge_type": "single",
+      "_doc_key": "dpr",
+      "query": "Using 'Dense Passage Retrieval for Open-Domain Question Answering', explain why the authors claim their approach requires much less training data than prior dense models — and what technique makes this possible.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 97,
+      "judge_type": "single",
+      "_doc_key": "colbert",
+      "query": "Based on ColBERT, explain the trade-off the paper identifies between late interaction expressiveness and the index storage cost at large passage corpus scale.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 98,
+      "judge_type": "single",
+      "_doc_key": "beir",
+      "query": "Synthesize BEIR's central finding about out-of-domain retrieval generalization and what it implies for how future retrieval models should be evaluated.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 99,
+      "judge_type": "single",
+      "_doc_key": "squad",
+      "query": "Using the SQuAD paper, explain what the human performance ceiling reveals about reading comprehension task difficulty and what question types are hardest for models.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 100,
+      "judge_type": "single",
+      "_doc_key": "natural_questions",
+      "query": "Based on Natural Questions, synthesize the paper's argument about why realistic question distribution matters for QA research and what Natural Questions contributes over prior benchmarks.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 101,
+      "judge_type": "single",
+      "_doc_key": "drqa",
+      "query": "Using DrQA, explain how the system bridges document retrieval over all of Wikipedia with fine-grained answer span extraction — and what main limitation this two-stage architecture creates.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 102,
+      "judge_type": "single",
+      "_doc_key": "pegasus",
+      "query": "Based on PEGASUS, explain the hypothesis behind gap sentence generation pre-training and what evidence the paper provides that it aligns better with abstractive summarization than masked language modeling.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 103,
+      "judge_type": "single",
+      "_doc_key": "bart",
+      "query": "Using the BART paper, explain why text-infilling and sentence permutation are the most effective corruption strategies for generation tasks compared to token masking or deletion.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 104,
+      "judge_type": "single",
+      "_doc_key": "transformer",
+      "query": "Based on 'Attention Is All You Need', synthesize the main argument for why the Transformer is more parallelizable and handles long-range dependencies better than recurrent sequence models.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 105,
+      "judge_type": "single",
+      "_doc_key": "cot",
+      "query": "Using the chain-of-thought prompting paper, explain why the reasoning capability appears only at large model scales and what this implies for smaller models attempting the same prompting strategies.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 106,
+      "judge_type": "multi",
+      "_doc_keys": ["dpr", "colbert"],
+      "query": "Compare the retrieval mechanisms of DPR and ColBERT — how does late interaction in ColBERT improve on DPR's single-vector similarity, and what does that trade off in index cost?",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 107,
+      "judge_type": "multi",
+      "_doc_keys": ["dpr", "colbert"],
+      "query": "Based on DPR and ColBERT, compare their index storage requirements and query latency trade-offs for large-scale passage retrieval at Wikipedia scale.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 108,
+      "judge_type": "multi",
+      "_doc_keys": ["rag", "drqa"],
+      "query": "Compare the open-domain QA architectures in RAG and DrQA — how do they differ in how retrieval interacts with answer generation versus extraction?",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 109,
+      "judge_type": "multi",
+      "_doc_keys": ["squad", "natural_questions"],
+      "query": "Compare the dataset construction methodology, answer format, and evaluation protocol in SQuAD and Natural Questions — explain how each design choice shapes what models learn.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 110,
+      "judge_type": "multi",
+      "_doc_keys": ["pegasus", "bart"],
+      "query": "Compare the pre-training objectives of PEGASUS and BART for abstractive summarization — which design choices favor each approach for downstream generation tasks?",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 111,
+      "judge_type": "multi",
+      "_doc_keys": ["pegasus", "bart"],
+      "query": "Based on PEGASUS and BART, compare their reported ROUGE scores on CNN/DailyMail and XSum — what might explain the performance difference on each dataset?",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 112,
+      "judge_type": "multi",
+      "_doc_keys": ["bert", "transformer"],
+      "query": "Compare the architectural contributions of BERT and the original Transformer — how did BERT adapt the Transformer encoder for unsupervised pre-training, and what did it add beyond the original architecture?",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 113,
+      "judge_type": "multi",
+      "_doc_keys": ["cot", "instructgpt"],
+      "query": "Compare chain-of-thought prompting and RLHF fine-tuning as strategies for improving reasoning and instruction following — what are each approach's relative strengths and what problems each handles best?",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 114,
+      "judge_type": "multi",
+      "_doc_keys": ["factscore", "llm_judge"],
+      "query": "Compare the evaluation methodology in FActScore and 'Judging LLM-as-a-Judge' — how do they differ in granularity, what each is measuring, and what each requires from the evaluator?",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 115,
+      "judge_type": "multi",
+      "_doc_keys": ["factscore", "llm_judge"],
+      "query": "Based on FActScore and 'Judging LLM-as-a-Judge', what do both papers conclude about the reliability of LLM-generated evaluations — where do their recommendations agree and where do they diverge?",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 116,
+      "judge_type": "multi",
+      "_doc_keys": ["dpr", "beir"],
+      "query": "Using DPR and BEIR together, explain why a dense retriever that performs well on Natural Questions may generalize poorly to biomedical or legal retrieval tasks according to the BEIR evaluation.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 117,
+      "judge_type": "multi",
+      "_doc_keys": ["rag", "instructgpt"],
+      "query": "Compare how RAG and InstructGPT approach making language model outputs more reliable — one through retrieval grounding, the other through alignment training — and what each addresses that the other does not.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 118,
+      "judge_type": "multi",
+      "_doc_keys": ["colbert", "beir"],
+      "query": "Based on ColBERT and BEIR, analyze whether token-level late interaction improves zero-shot generalization across heterogeneous retrieval domains compared to single-vector dense models.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 119,
+      "judge_type": "multi",
+      "_doc_keys": ["natural_questions", "drqa"],
+      "query": "Compare how Natural Questions and DrQA each conceptualize and address the challenge of open-domain question answering over Wikipedia — what assumptions each makes and where they differ.",
+      "doc_id": null,
+      "doc_ids": null
+    },
+    {
+      "id": 120,
+      "judge_type": "multi",
+      "_doc_keys": ["dpr", "colbert", "beir"],
+      "query": "Synthesize the contributions of DPR, ColBERT, and BEIR together — how do these three works collectively advance our understanding of dense neural retrieval and how to evaluate it?",
+      "doc_id": null,
+      "doc_ids": null
+    }
+  ]
+}

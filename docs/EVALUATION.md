@@ -18,7 +18,7 @@ This document describes the three evaluation dimensions in ScholarRAG: retrieval
     "query": "What are the main contributions of this paper?",
     "doc_ids": [1, 2],
     "relevant_chunk_ids": [10, 14, 22],
-    "relevant_doc_id": 1
+    "relevant_doc_ids": [1]
   }
 ]
 ```
@@ -43,6 +43,8 @@ python scripts/eval_retrieval.py \
 ```
 
 Results are also stored to the `eval_runs` Postgres table with full details for trend analysis across model versions.
+
+The Evaluation Studio frontend can auto-generate a 120-query retrieval preset from ready uploaded documents. Its API payload uses `cases` with `query`, `expected_doc_id`, and optional `doc_id` / `doc_ids`.
 
 ### Benchmark Results (120-query eval set)
 
@@ -100,13 +102,19 @@ The heuristic is a proxy for coverage (not faithfulness) but costs zero tokens a
 # Via API
 POST /eval/judge
 {
-  "queries": [...],
+  "cases": [
+    {"query": "Summarize the main contribution", "doc_id": 12},
+    {"query": "Compare the methodology", "doc_ids": [12, 14]}
+  ],
   "scope": "uploaded",
-  "doc_ids": [1, 2, 3]
+  "k": 10,
+  "run_judge_llm": true
 }
 ```
 
 Results are stored to `evaluation_judge_runs` for trend analysis.
+
+The Evaluation Studio frontend can also auto-generate a 120-query synthesis judge preset from ready uploaded documents, mixing single-document and multi-document prompts when multiple uploaded papers are available.
 
 ### Benchmark Results
 

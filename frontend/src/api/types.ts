@@ -183,6 +183,7 @@ export type JudgeCasePayload = {
   answer?: string;
   citations?: Citation[];
   doc_id?: number;
+  doc_ids?: number[];
   scope?: 'uploaded' | 'public';
   allow_general_background?: boolean;
 };
@@ -323,6 +324,8 @@ export type ChatSession = {
 export type EvalCase = {
   query: string;
   expected_doc_id?: number;
+  doc_id?: number;
+  doc_ids?: number[];
   expected_passage?: string;
 };
 

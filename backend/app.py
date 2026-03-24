@@ -1283,9 +1283,14 @@ def metrics_requests():
     }
 
 
-def _eval_candidates_for_query(query: str, k: int) -> tuple[list[dict], list[dict], dict]:
+def _eval_candidates_for_query(
+    query: str,
+    k: int,
+    doc_id: int | None = None,
+    doc_ids: list[int] | None = None,
+) -> tuple[list[dict], list[dict], dict]:
     t_retrieve = time.perf_counter()
-    raw = search_uploaded_chunks(query, k=max(10, k))["results"]
+    raw = search_uploaded_chunks({"q": query, "k": max(10, k), "doc_id": doc_id, "doc_ids": doc_ids})["results"]
     retrieve_ms = (time.perf_counter() - t_retrieve) * 1000
 
     retrieval_only = []
@@ -1441,10 +1446,26 @@ def run_eval(payload: dict = Body(...)):
     for case in cases:
         query = (case.get("query") or "").strip()
         gold_doc_id = case.get("expected_doc_id")
+        case_doc_id = case.get("doc_id")
+        raw_case_doc_ids = case.get("doc_ids")
+        case_doc_ids = None
+        try:
+            gold_doc_id = int(gold_doc_id) if gold_doc_id is not None else None
+        except Exception:
+            gold_doc_id = None
+        try:
+            case_doc_id = int(case_doc_id) if case_doc_id is not None else None
+        except Exception:
+            case_doc_id = None
+        if isinstance(raw_case_doc_ids, list):
+            try:
+                case_doc_ids = [int(x) for x in raw_case_doc_ids if x is not None]
+            except Exception:
+                case_doc_ids = None
         if not query:
             continue
 
-        base, reranked, lat = _eval_candidates_for_query(query, k)
+        base, reranked, lat = _eval_candidates_for_query(query, k, doc_id=case_doc_id, doc_ids=case_doc_ids)
         lat_retrieve.append(lat["retrieve_ms"])
         lat_rerank.append(lat["rerank_ms"])
         lat_generate.append(0.0)
@@ -1457,6 +1478,8 @@ def run_eval(payload: dict = Body(...)):
             {
                 "query": query,
                 "gold_doc_id": gold_doc_id,
+                "doc_id": case_doc_id,
+                "doc_ids": case_doc_ids,
                 "retrieval_only_top": base[:5],
                 "rerank_top": reranked[:5],
                 "latency_ms": lat,
@@ -1552,6 +1575,19 @@ def run_judge(payload: dict = Body(...)):
         if not query:
             continue
 
+        case_doc_id = case.get("doc_id")
+        raw_case_doc_ids = case.get("doc_ids")
+        case_doc_ids = None
+        try:
+            case_doc_id = int(case_doc_id) if case_doc_id is not None else None
+        except Exception:
+            case_doc_id = None
+        if isinstance(raw_case_doc_ids, list):
+            try:
+                case_doc_ids = [int(x) for x in raw_case_doc_ids if x is not None]
+            except Exception:
+                case_doc_ids = None
+
         answer = (case.get("answer") or "").strip()
         citations = case.get("citations")
         if not answer or not isinstance(citations, list):
@@ -1559,7 +1595,8 @@ def run_judge(payload: dict = Body(...)):
                 {
                     "query": query,
                     "scope": scope,
-                    "doc_id": case.get("doc_id"),
+                    "doc_id": case_doc_id,
+                    "doc_ids": case_doc_ids,
                     "k": k,
                     "run_judge": False,
                     "allow_general_background": bool(case.get("allow_general_background", False)),
@@ -1574,6 +1611,8 @@ def run_judge(payload: dict = Body(...)):
                 "answer": answer,
                 "citations": citations if isinstance(citations, list) else [],
                 "faithfulness": report,
+                "doc_id": case_doc_id,
+                "doc_ids": case_doc_ids,
                 "scope": scope,
             }
         )

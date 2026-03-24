@@ -321,6 +321,14 @@ cd frontend
 vercel deploy
 ```
 
+Recommended Vercel project settings for this repo:
+
+- Framework preset: `Vite`
+- Root directory: `frontend`
+- Install command: `npm install`
+- Build command: `npm run build`
+- Output directory: `dist`
+
 ### Backend → Docker / VM
 
 ```bash

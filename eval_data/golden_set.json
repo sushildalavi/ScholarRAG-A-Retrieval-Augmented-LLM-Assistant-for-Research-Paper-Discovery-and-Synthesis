@@ -1,0 +1,842 @@
+[
+  {
+    "query": "What problem does 'Dense Passage Retrieval for Open-Domain Question Answering' address and why is it significant?",
+    "expected_doc_id": 1,
+    "relevant_doc_ids": [1],
+    "paper": "Dense Passage Retrieval for Open-Domain Question Answering",
+    "focus": "research_problem"
+  },
+  {
+    "query": "What is the main contribution of 'Dense Passage Retrieval for Open-Domain Question Answering'?",
+    "expected_doc_id": 1,
+    "relevant_doc_ids": [1],
+    "paper": "Dense Passage Retrieval for Open-Domain Question Answering",
+    "focus": "main_contributions"
+  },
+  {
+    "query": "How does the dense retrieval method in 'Dense Passage Retrieval for Open-Domain Question Answering' work?",
+    "expected_doc_id": 1,
+    "relevant_doc_ids": [1],
+    "paper": "Dense Passage Retrieval for Open-Domain Question Answering",
+    "focus": "methodology"
+  },
+  {
+    "query": "What datasets and benchmarks does 'Dense Passage Retrieval for Open-Domain Question Answering' use to evaluate performance?",
+    "expected_doc_id": 1,
+    "relevant_doc_ids": [1],
+    "paper": "Dense Passage Retrieval for Open-Domain Question Answering",
+    "focus": "datasets_or_benchmarks"
+  },
+  {
+    "query": "What are the quantitative results reported in 'Dense Passage Retrieval for Open-Domain Question Answering'?",
+    "expected_doc_id": 1,
+    "relevant_doc_ids": [1],
+    "paper": "Dense Passage Retrieval for Open-Domain Question Answering",
+    "focus": "quantitative_results"
+  },
+  {
+    "query": "How does 'Dense Passage Retrieval for Open-Domain Question Answering' compare to BM25 and other sparse retrieval baselines?",
+    "expected_doc_id": 1,
+    "relevant_doc_ids": [1],
+    "paper": "Dense Passage Retrieval for Open-Domain Question Answering",
+    "focus": "baseline_comparisons"
+  },
+  {
+    "query": "What limitations or failure cases does 'Dense Passage Retrieval for Open-Domain Question Answering' acknowledge?",
+    "expected_doc_id": 1,
+    "relevant_doc_ids": [1],
+    "paper": "Dense Passage Retrieval for Open-Domain Question Answering",
+    "focus": "limitations"
+  },
+  {
+    "query": "How does the training objective in 'Dense Passage Retrieval for Open-Domain Question Answering' differ from earlier retrieval approaches?",
+    "expected_doc_id": 1,
+    "relevant_doc_ids": [1],
+    "paper": "Dense Passage Retrieval for Open-Domain Question Answering",
+    "focus": "methodology"
+  },
+  {
+    "query": "What retrieval problem does ColBERT set out to solve, and what are its motivating challenges?",
+    "expected_doc_id": 2,
+    "relevant_doc_ids": [2],
+    "paper": "ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT",
+    "focus": "research_problem"
+  },
+  {
+    "query": "What is the key innovation introduced in 'ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT'?",
+    "expected_doc_id": 2,
+    "relevant_doc_ids": [2],
+    "paper": "ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT",
+    "focus": "main_contributions"
+  },
+  {
+    "query": "Explain the late interaction mechanism described in ColBERT and how it differs from single-vector retrieval.",
+    "expected_doc_id": 2,
+    "relevant_doc_ids": [2],
+    "paper": "ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT",
+    "focus": "methodology"
+  },
+  {
+    "query": "What benchmarks are used to evaluate ColBERT, and what metrics are reported?",
+    "expected_doc_id": 2,
+    "relevant_doc_ids": [2],
+    "paper": "ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT",
+    "focus": "datasets_or_benchmarks"
+  },
+  {
+    "query": "What are the quantitative retrieval effectiveness results reported in ColBERT?",
+    "expected_doc_id": 2,
+    "relevant_doc_ids": [2],
+    "paper": "ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT",
+    "focus": "quantitative_results"
+  },
+  {
+    "query": "How does ColBERT compare to dense single-vector models like DPR and to BM25?",
+    "expected_doc_id": 2,
+    "relevant_doc_ids": [2],
+    "paper": "ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT",
+    "focus": "baseline_comparisons"
+  },
+  {
+    "query": "What are the efficiency trade-offs or limitations discussed in ColBERT?",
+    "expected_doc_id": 2,
+    "relevant_doc_ids": [2],
+    "paper": "ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT",
+    "focus": "limitations"
+  },
+  {
+    "query": "How does the indexing strategy in ColBERT enable scalable retrieval while preserving contextualized representations?",
+    "expected_doc_id": 2,
+    "relevant_doc_ids": [2],
+    "paper": "ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT",
+    "focus": "methodology"
+  },
+  {
+    "query": "What is the core problem that 'Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks' addresses?",
+    "expected_doc_id": 3,
+    "relevant_doc_ids": [3],
+    "paper": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+    "focus": "research_problem"
+  },
+  {
+    "query": "What does 'Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks' contribute to knowledge-intensive NLP?",
+    "expected_doc_id": 3,
+    "relevant_doc_ids": [3],
+    "paper": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+    "focus": "main_contributions"
+  },
+  {
+    "query": "How does the RAG model combine retrieval and generation in 'Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks'?",
+    "expected_doc_id": 3,
+    "relevant_doc_ids": [3],
+    "paper": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+    "focus": "methodology"
+  },
+  {
+    "query": "What datasets does 'Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks' use for evaluation?",
+    "expected_doc_id": 3,
+    "relevant_doc_ids": [3],
+    "paper": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+    "focus": "datasets_or_benchmarks"
+  },
+  {
+    "query": "What quantitative improvements does RAG achieve over closed-book and non-retrieval baselines?",
+    "expected_doc_id": 3,
+    "relevant_doc_ids": [3],
+    "paper": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+    "focus": "quantitative_results"
+  },
+  {
+    "query": "How does RAG compare to closed-book generation models in 'Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks'?",
+    "expected_doc_id": 3,
+    "relevant_doc_ids": [3],
+    "paper": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+    "focus": "baseline_comparisons"
+  },
+  {
+    "query": "What limitations of the RAG approach are acknowledged in 'Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks'?",
+    "expected_doc_id": 3,
+    "relevant_doc_ids": [3],
+    "paper": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+    "focus": "limitations"
+  },
+  {
+    "query": "How does 'Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks' handle the integration of retrieved documents during generation?",
+    "expected_doc_id": 3,
+    "relevant_doc_ids": [3],
+    "paper": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+    "focus": "methodology"
+  },
+  {
+    "query": "What gap in IR evaluation does the BEIR benchmark aim to fill?",
+    "expected_doc_id": 4,
+    "relevant_doc_ids": [4],
+    "paper": "BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models",
+    "focus": "research_problem"
+  },
+  {
+    "query": "What is the main contribution of 'BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models' to the IR research community?",
+    "expected_doc_id": 4,
+    "relevant_doc_ids": [4],
+    "paper": "BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models",
+    "focus": "main_contributions"
+  },
+  {
+    "query": "How is the BEIR benchmark structured and what domains does it cover?",
+    "expected_doc_id": 4,
+    "relevant_doc_ids": [4],
+    "paper": "BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models",
+    "focus": "methodology"
+  },
+  {
+    "query": "What datasets are included in the BEIR benchmark and what retrieval tasks do they represent?",
+    "expected_doc_id": 4,
+    "relevant_doc_ids": [4],
+    "paper": "BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models",
+    "focus": "datasets_or_benchmarks"
+  },
+  {
+    "query": "Which retrieval models are evaluated in BEIR and what are the key performance findings?",
+    "expected_doc_id": 4,
+    "relevant_doc_ids": [4],
+    "paper": "BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models",
+    "focus": "quantitative_results"
+  },
+  {
+    "query": "How do dense retrieval models compare to BM25 in zero-shot settings according to BEIR?",
+    "expected_doc_id": 4,
+    "relevant_doc_ids": [4],
+    "paper": "BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models",
+    "focus": "baseline_comparisons"
+  },
+  {
+    "query": "What limitations does 'BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models' acknowledge about its evaluation scope?",
+    "expected_doc_id": 4,
+    "relevant_doc_ids": [4],
+    "paper": "BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models",
+    "focus": "limitations"
+  },
+  {
+    "query": "What conclusions does BEIR draw about the generalization ability of neural retrieval models across diverse domains?",
+    "expected_doc_id": 4,
+    "relevant_doc_ids": [4],
+    "paper": "BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models",
+    "focus": "main_findings"
+  },
+  {
+    "query": "What is the research motivation behind creating the SQuAD dataset for machine comprehension?",
+    "expected_doc_id": 5,
+    "relevant_doc_ids": [5],
+    "paper": "SQuAD: 100,000+ Questions for Machine Comprehension of Text",
+    "focus": "research_problem"
+  },
+  {
+    "query": "What does 'SQuAD: 100,000+ Questions for Machine Comprehension of Text' contribute to reading comprehension research?",
+    "expected_doc_id": 5,
+    "relevant_doc_ids": [5],
+    "paper": "SQuAD: 100,000+ Questions for Machine Comprehension of Text",
+    "focus": "main_contributions"
+  },
+  {
+    "query": "How was the SQuAD dataset collected and annotated using crowdworkers?",
+    "expected_doc_id": 5,
+    "relevant_doc_ids": [5],
+    "paper": "SQuAD: 100,000+ Questions for Machine Comprehension of Text",
+    "focus": "methodology"
+  },
+  {
+    "query": "What is the scale and composition of the SQuAD dataset?",
+    "expected_doc_id": 5,
+    "relevant_doc_ids": [5],
+    "paper": "SQuAD: 100,000+ Questions for Machine Comprehension of Text",
+    "focus": "datasets_or_benchmarks"
+  },
+  {
+    "query": "What human and model performance baselines are reported in 'SQuAD: 100,000+ Questions for Machine Comprehension of Text'?",
+    "expected_doc_id": 5,
+    "relevant_doc_ids": [5],
+    "paper": "SQuAD: 100,000+ Questions for Machine Comprehension of Text",
+    "focus": "quantitative_results"
+  },
+  {
+    "query": "How do baseline models in SQuAD compare to human performance on the reading comprehension task?",
+    "expected_doc_id": 5,
+    "relevant_doc_ids": [5],
+    "paper": "SQuAD: 100,000+ Questions for Machine Comprehension of Text",
+    "focus": "baseline_comparisons"
+  },
+  {
+    "query": "What limitations or challenging question types does SQuAD acknowledge in its evaluation?",
+    "expected_doc_id": 5,
+    "relevant_doc_ids": [5],
+    "paper": "SQuAD: 100,000+ Questions for Machine Comprehension of Text",
+    "focus": "limitations"
+  },
+  {
+    "query": "What evaluation metrics are used in SQuAD and why were they chosen?",
+    "expected_doc_id": 5,
+    "relevant_doc_ids": [5],
+    "paper": "SQuAD: 100,000+ Questions for Machine Comprehension of Text",
+    "focus": "evaluation_protocol"
+  },
+  {
+    "query": "What problem does 'Natural Questions: A Benchmark for Question Answering Research' address compared to prior QA benchmarks?",
+    "expected_doc_id": 6,
+    "relevant_doc_ids": [6],
+    "paper": "Natural Questions: A Benchmark for Question Answering Research",
+    "focus": "research_problem"
+  },
+  {
+    "query": "What is the unique contribution of the Natural Questions dataset to open-domain QA research?",
+    "expected_doc_id": 6,
+    "relevant_doc_ids": [6],
+    "paper": "Natural Questions: A Benchmark for Question Answering Research",
+    "focus": "main_contributions"
+  },
+  {
+    "query": "How was the Natural Questions dataset collected and what annotation process was used?",
+    "expected_doc_id": 6,
+    "relevant_doc_ids": [6],
+    "paper": "Natural Questions: A Benchmark for Question Answering Research",
+    "focus": "methodology"
+  },
+  {
+    "query": "What distinguishes Natural Questions from SQuAD and other prior reading comprehension datasets?",
+    "expected_doc_id": 6,
+    "relevant_doc_ids": [6],
+    "paper": "Natural Questions: A Benchmark for Question Answering Research",
+    "focus": "baseline_comparisons"
+  },
+  {
+    "query": "What baseline models are evaluated on Natural Questions and what are their performance scores?",
+    "expected_doc_id": 6,
+    "relevant_doc_ids": [6],
+    "paper": "Natural Questions: A Benchmark for Question Answering Research",
+    "focus": "quantitative_results"
+  },
+  {
+    "query": "What are the main findings about QA model performance reported in 'Natural Questions: A Benchmark for Question Answering Research'?",
+    "expected_doc_id": 6,
+    "relevant_doc_ids": [6],
+    "paper": "Natural Questions: A Benchmark for Question Answering Research",
+    "focus": "main_findings"
+  },
+  {
+    "query": "What annotation challenges and limitations are discussed in 'Natural Questions: A Benchmark for Question Answering Research'?",
+    "expected_doc_id": 6,
+    "relevant_doc_ids": [6],
+    "paper": "Natural Questions: A Benchmark for Question Answering Research",
+    "focus": "limitations"
+  },
+  {
+    "query": "How does 'Natural Questions' define and evaluate short and long answer responses?",
+    "expected_doc_id": 6,
+    "relevant_doc_ids": [6],
+    "paper": "Natural Questions: A Benchmark for Question Answering Research",
+    "focus": "evaluation_protocol"
+  },
+  {
+    "query": "What open-domain QA challenge does DrQA in 'Reading Wikipedia to Answer Open-Domain Questions' aim to solve?",
+    "expected_doc_id": 7,
+    "relevant_doc_ids": [7],
+    "paper": "Reading Wikipedia to Answer Open-Domain Questions",
+    "focus": "research_problem"
+  },
+  {
+    "query": "What is the main technical contribution of DrQA in 'Reading Wikipedia to Answer Open-Domain Questions'?",
+    "expected_doc_id": 7,
+    "relevant_doc_ids": [7],
+    "paper": "Reading Wikipedia to Answer Open-Domain Questions",
+    "focus": "main_contributions"
+  },
+  {
+    "query": "How does DrQA combine document retrieval and reading comprehension in 'Reading Wikipedia to Answer Open-Domain Questions'?",
+    "expected_doc_id": 7,
+    "relevant_doc_ids": [7],
+    "paper": "Reading Wikipedia to Answer Open-Domain Questions",
+    "focus": "methodology"
+  },
+  {
+    "query": "What datasets are used to evaluate DrQA in 'Reading Wikipedia to Answer Open-Domain Questions'?",
+    "expected_doc_id": 7,
+    "relevant_doc_ids": [7],
+    "paper": "Reading Wikipedia to Answer Open-Domain Questions",
+    "focus": "datasets_or_benchmarks"
+  },
+  {
+    "query": "What are the quantitative results reported for DrQA on open-domain QA benchmarks?",
+    "expected_doc_id": 7,
+    "relevant_doc_ids": [7],
+    "paper": "Reading Wikipedia to Answer Open-Domain Questions",
+    "focus": "quantitative_results"
+  },
+  {
+    "query": "How does DrQA compare to alternative open-domain QA systems in 'Reading Wikipedia to Answer Open-Domain Questions'?",
+    "expected_doc_id": 7,
+    "relevant_doc_ids": [7],
+    "paper": "Reading Wikipedia to Answer Open-Domain Questions",
+    "focus": "baseline_comparisons"
+  },
+  {
+    "query": "What limitations of the DrQA pipeline are acknowledged in 'Reading Wikipedia to Answer Open-Domain Questions'?",
+    "expected_doc_id": 7,
+    "relevant_doc_ids": [7],
+    "paper": "Reading Wikipedia to Answer Open-Domain Questions",
+    "focus": "limitations"
+  },
+  {
+    "query": "How does DrQA handle the trade-off between retrieval recall and reader precision in 'Reading Wikipedia to Answer Open-Domain Questions'?",
+    "expected_doc_id": 7,
+    "relevant_doc_ids": [7],
+    "paper": "Reading Wikipedia to Answer Open-Domain Questions",
+    "focus": "methodology"
+  },
+  {
+    "query": "What summarization challenge motivates the PEGASUS pre-training approach?",
+    "expected_doc_id": 8,
+    "relevant_doc_ids": [8],
+    "paper": "PEGASUS: Pre-training with Extracted Gap-sentences for Abstractive Summarization",
+    "focus": "research_problem"
+  },
+  {
+    "query": "What is the key pre-training innovation introduced in PEGASUS?",
+    "expected_doc_id": 8,
+    "relevant_doc_ids": [8],
+    "paper": "PEGASUS: Pre-training with Extracted Gap-sentences for Abstractive Summarization",
+    "focus": "main_contributions"
+  },
+  {
+    "query": "How does the gap-sentence generation pre-training objective work in PEGASUS?",
+    "expected_doc_id": 8,
+    "relevant_doc_ids": [8],
+    "paper": "PEGASUS: Pre-training with Extracted Gap-sentences for Abstractive Summarization",
+    "focus": "methodology"
+  },
+  {
+    "query": "What summarization benchmarks are used to evaluate PEGASUS?",
+    "expected_doc_id": 8,
+    "relevant_doc_ids": [8],
+    "paper": "PEGASUS: Pre-training with Extracted Gap-sentences for Abstractive Summarization",
+    "focus": "datasets_or_benchmarks"
+  },
+  {
+    "query": "What ROUGE scores does PEGASUS achieve compared to prior state-of-the-art summarization models?",
+    "expected_doc_id": 8,
+    "relevant_doc_ids": [8],
+    "paper": "PEGASUS: Pre-training with Extracted Gap-sentences for Abstractive Summarization",
+    "focus": "quantitative_results"
+  },
+  {
+    "query": "How does PEGASUS compare to BART and other seq2seq models on summarization benchmarks?",
+    "expected_doc_id": 8,
+    "relevant_doc_ids": [8],
+    "paper": "PEGASUS: Pre-training with Extracted Gap-sentences for Abstractive Summarization",
+    "focus": "baseline_comparisons"
+  },
+  {
+    "query": "What limitations does PEGASUS acknowledge regarding its pre-training objective or evaluation?",
+    "expected_doc_id": 8,
+    "relevant_doc_ids": [8],
+    "paper": "PEGASUS: Pre-training with Extracted Gap-sentences for Abstractive Summarization",
+    "focus": "limitations"
+  },
+  {
+    "query": "How does the choice of pre-training corpus affect performance in PEGASUS?",
+    "expected_doc_id": 8,
+    "relevant_doc_ids": [8],
+    "paper": "PEGASUS: Pre-training with Extracted Gap-sentences for Abstractive Summarization",
+    "focus": "experimental_setup"
+  },
+  {
+    "query": "What is the research problem that BART addresses in natural language generation and comprehension?",
+    "expected_doc_id": 9,
+    "relevant_doc_ids": [9],
+    "paper": "BART: Denoising Sequence-to-Sequence Pre-training for Natural Language Generation, Translation, and Comprehension",
+    "focus": "research_problem"
+  },
+  {
+    "query": "What is the main innovation of the BART denoising pre-training approach?",
+    "expected_doc_id": 9,
+    "relevant_doc_ids": [9],
+    "paper": "BART: Denoising Sequence-to-Sequence Pre-training for Natural Language Generation, Translation, and Comprehension",
+    "focus": "main_contributions"
+  },
+  {
+    "query": "How does the denoising pre-training objective in BART differ from BERT and GPT pre-training?",
+    "expected_doc_id": 9,
+    "relevant_doc_ids": [9],
+    "paper": "BART: Denoising Sequence-to-Sequence Pre-training for Natural Language Generation, Translation, and Comprehension",
+    "focus": "methodology"
+  },
+  {
+    "query": "What tasks and datasets are used to evaluate BART across generation and comprehension?",
+    "expected_doc_id": 9,
+    "relevant_doc_ids": [9],
+    "paper": "BART: Denoising Sequence-to-Sequence Pre-training for Natural Language Generation, Translation, and Comprehension",
+    "focus": "datasets_or_benchmarks"
+  },
+  {
+    "query": "What are the quantitative results for BART on summarization, translation, and QA tasks?",
+    "expected_doc_id": 9,
+    "relevant_doc_ids": [9],
+    "paper": "BART: Denoising Sequence-to-Sequence Pre-training for Natural Language Generation, Translation, and Comprehension",
+    "focus": "quantitative_results"
+  },
+  {
+    "query": "How does BART compare to T5, RoBERTa, and other pre-trained models?",
+    "expected_doc_id": 9,
+    "relevant_doc_ids": [9],
+    "paper": "BART: Denoising Sequence-to-Sequence Pre-training for Natural Language Generation, Translation, and Comprehension",
+    "focus": "baseline_comparisons"
+  },
+  {
+    "query": "What limitations or failure cases does BART acknowledge in its pre-training or fine-tuning?",
+    "expected_doc_id": 9,
+    "relevant_doc_ids": [9],
+    "paper": "BART: Denoising Sequence-to-Sequence Pre-training for Natural Language Generation, Translation, and Comprehension",
+    "focus": "limitations"
+  },
+  {
+    "query": "How does BART handle different noise functions and which is most effective for generation tasks?",
+    "expected_doc_id": 9,
+    "relevant_doc_ids": [9],
+    "paper": "BART: Denoising Sequence-to-Sequence Pre-training for Natural Language Generation, Translation, and Comprehension",
+    "focus": "experimental_setup"
+  },
+  {
+    "query": "What problem with existing factuality evaluation does FActScore set out to solve?",
+    "expected_doc_id": 10,
+    "relevant_doc_ids": [10],
+    "paper": "FActScore: Fine-Grained Atomic Evaluation of Factual Precision in Long Form Text Generation",
+    "focus": "research_problem"
+  },
+  {
+    "query": "What is the atomic claim decomposition approach introduced in FActScore?",
+    "expected_doc_id": 10,
+    "relevant_doc_ids": [10],
+    "paper": "FActScore: Fine-Grained Atomic Evaluation of Factual Precision in Long Form Text Generation",
+    "focus": "main_contributions"
+  },
+  {
+    "query": "How does the FActScore metric work and how is it computed over long-form generation?",
+    "expected_doc_id": 10,
+    "relevant_doc_ids": [10],
+    "paper": "FActScore: Fine-Grained Atomic Evaluation of Factual Precision in Long Form Text Generation",
+    "focus": "methodology"
+  },
+  {
+    "query": "What models and generation tasks are evaluated using FActScore?",
+    "expected_doc_id": 10,
+    "relevant_doc_ids": [10],
+    "paper": "FActScore: Fine-Grained Atomic Evaluation of Factual Precision in Long Form Text Generation",
+    "focus": "datasets_or_benchmarks"
+  },
+  {
+    "query": "What are the main quantitative findings reported in FActScore about LLM factual precision?",
+    "expected_doc_id": 10,
+    "relevant_doc_ids": [10],
+    "paper": "FActScore: Fine-Grained Atomic Evaluation of Factual Precision in Long Form Text Generation",
+    "focus": "quantitative_results"
+  },
+  {
+    "query": "How does FActScore compare to ROUGE, BERTScore, and other automatic evaluation metrics for factuality?",
+    "expected_doc_id": 10,
+    "relevant_doc_ids": [10],
+    "paper": "FActScore: Fine-Grained Atomic Evaluation of Factual Precision in Long Form Text Generation",
+    "focus": "baseline_comparisons"
+  },
+  {
+    "query": "What limitations of the FActScore approach are discussed in its evaluation framework?",
+    "expected_doc_id": 10,
+    "relevant_doc_ids": [10],
+    "paper": "FActScore: Fine-Grained Atomic Evaluation of Factual Precision in Long Form Text Generation",
+    "focus": "limitations"
+  },
+  {
+    "query": "How does FActScore handle knowledge source selection and what impact does this have on factuality scores?",
+    "expected_doc_id": 10,
+    "relevant_doc_ids": [10],
+    "paper": "FActScore: Fine-Grained Atomic Evaluation of Factual Precision in Long Form Text Generation",
+    "focus": "experimental_setup"
+  },
+  {
+    "query": "What limitation of prior language model pre-training does BERT address?",
+    "expected_doc_id": 11,
+    "relevant_doc_ids": [11],
+    "paper": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+    "focus": "research_problem"
+  },
+  {
+    "query": "What are the main technical contributions of 'BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding'?",
+    "expected_doc_id": 11,
+    "relevant_doc_ids": [11],
+    "paper": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+    "focus": "main_contributions"
+  },
+  {
+    "query": "How does the masked language model pre-training objective in BERT work?",
+    "expected_doc_id": 11,
+    "relevant_doc_ids": [11],
+    "paper": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+    "focus": "methodology"
+  },
+  {
+    "query": "What benchmarks and fine-tuning tasks are used to evaluate BERT?",
+    "expected_doc_id": 11,
+    "relevant_doc_ids": [11],
+    "paper": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+    "focus": "datasets_or_benchmarks"
+  },
+  {
+    "query": "What GLUE and SQuAD scores does BERT achieve compared to prior models?",
+    "expected_doc_id": 11,
+    "relevant_doc_ids": [11],
+    "paper": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+    "focus": "quantitative_results"
+  },
+  {
+    "query": "How does BERT compare to ELMo, GPT, and other pre-training approaches?",
+    "expected_doc_id": 11,
+    "relevant_doc_ids": [11],
+    "paper": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+    "focus": "baseline_comparisons"
+  },
+  {
+    "query": "What limitations or negative results are acknowledged in 'BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding'?",
+    "expected_doc_id": 11,
+    "relevant_doc_ids": [11],
+    "paper": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+    "focus": "limitations"
+  },
+  {
+    "query": "How does BERT's bidirectional context differ from unidirectional language models and why does it matter?",
+    "expected_doc_id": 11,
+    "relevant_doc_ids": [11],
+    "paper": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+    "focus": "methodology"
+  },
+  {
+    "query": "What problem with recurrent and convolutional sequence models does 'Attention Is All You Need' identify?",
+    "expected_doc_id": 12,
+    "relevant_doc_ids": [12],
+    "paper": "Attention Is All You Need",
+    "focus": "research_problem"
+  },
+  {
+    "query": "What is the Transformer architecture introduced in 'Attention Is All You Need'?",
+    "expected_doc_id": 12,
+    "relevant_doc_ids": [12],
+    "paper": "Attention Is All You Need",
+    "focus": "model_architecture"
+  },
+  {
+    "query": "How does the multi-head self-attention mechanism work in 'Attention Is All You Need'?",
+    "expected_doc_id": 12,
+    "relevant_doc_ids": [12],
+    "paper": "Attention Is All You Need",
+    "focus": "methodology"
+  },
+  {
+    "query": "What translation tasks and datasets are used to evaluate the Transformer in 'Attention Is All You Need'?",
+    "expected_doc_id": 12,
+    "relevant_doc_ids": [12],
+    "paper": "Attention Is All You Need",
+    "focus": "datasets_or_benchmarks"
+  },
+  {
+    "query": "What BLEU scores does the Transformer achieve in 'Attention Is All You Need' compared to prior sequence-to-sequence models?",
+    "expected_doc_id": 12,
+    "relevant_doc_ids": [12],
+    "paper": "Attention Is All You Need",
+    "focus": "quantitative_results"
+  },
+  {
+    "query": "How does the Transformer in 'Attention Is All You Need' compare to recurrent and convolutional architectures?",
+    "expected_doc_id": 12,
+    "relevant_doc_ids": [12],
+    "paper": "Attention Is All You Need",
+    "focus": "baseline_comparisons"
+  },
+  {
+    "query": "What limitations or open questions does 'Attention Is All You Need' discuss regarding the Transformer model?",
+    "expected_doc_id": 12,
+    "relevant_doc_ids": [12],
+    "paper": "Attention Is All You Need",
+    "focus": "limitations"
+  },
+  {
+    "query": "How does positional encoding work in the Transformer described in 'Attention Is All You Need'?",
+    "expected_doc_id": 12,
+    "relevant_doc_ids": [12],
+    "paper": "Attention Is All You Need",
+    "focus": "methodology"
+  },
+  {
+    "query": "What reasoning failure in large language models motivates chain-of-thought prompting?",
+    "expected_doc_id": 13,
+    "relevant_doc_ids": [13],
+    "paper": "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models",
+    "focus": "research_problem"
+  },
+  {
+    "query": "What is chain-of-thought prompting as defined in 'Chain-of-Thought Prompting Elicits Reasoning in Large Language Models'?",
+    "expected_doc_id": 13,
+    "relevant_doc_ids": [13],
+    "paper": "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models",
+    "focus": "main_contributions"
+  },
+  {
+    "query": "How is chain-of-thought prompting implemented and what does a chain-of-thought exemplar look like?",
+    "expected_doc_id": 13,
+    "relevant_doc_ids": [13],
+    "paper": "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models",
+    "focus": "methodology"
+  },
+  {
+    "query": "What reasoning benchmarks are used to evaluate chain-of-thought prompting?",
+    "expected_doc_id": 13,
+    "relevant_doc_ids": [13],
+    "paper": "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models",
+    "focus": "datasets_or_benchmarks"
+  },
+  {
+    "query": "What accuracy improvements does chain-of-thought prompting achieve on arithmetic and commonsense reasoning?",
+    "expected_doc_id": 13,
+    "relevant_doc_ids": [13],
+    "paper": "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models",
+    "focus": "quantitative_results"
+  },
+  {
+    "query": "How does chain-of-thought prompting compare to standard few-shot prompting in 'Chain-of-Thought Prompting Elicits Reasoning in Large Language Models'?",
+    "expected_doc_id": 13,
+    "relevant_doc_ids": [13],
+    "paper": "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models",
+    "focus": "baseline_comparisons"
+  },
+  {
+    "query": "What limitations of chain-of-thought prompting are identified in 'Chain-of-Thought Prompting Elicits Reasoning in Large Language Models'?",
+    "expected_doc_id": 13,
+    "relevant_doc_ids": [13],
+    "paper": "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models",
+    "focus": "limitations"
+  },
+  {
+    "query": "For what model scales does chain-of-thought prompting provide meaningful gains according to 'Chain-of-Thought Prompting Elicits Reasoning'?",
+    "expected_doc_id": 13,
+    "relevant_doc_ids": [13],
+    "paper": "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models",
+    "focus": "experimental_setup"
+  },
+  {
+    "query": "What alignment problem does 'Training language models to follow instructions with human feedback' aim to solve?",
+    "expected_doc_id": 14,
+    "relevant_doc_ids": [14],
+    "paper": "Training language models to follow instructions with human feedback",
+    "focus": "research_problem"
+  },
+  {
+    "query": "What is RLHF and what does 'Training language models to follow instructions with human feedback' contribute to alignment research?",
+    "expected_doc_id": 14,
+    "relevant_doc_ids": [14],
+    "paper": "Training language models to follow instructions with human feedback",
+    "focus": "main_contributions"
+  },
+  {
+    "query": "How does the reinforcement learning from human feedback pipeline work in InstructGPT?",
+    "expected_doc_id": 14,
+    "relevant_doc_ids": [14],
+    "paper": "Training language models to follow instructions with human feedback",
+    "focus": "methodology"
+  },
+  {
+    "query": "What evaluation setup does 'Training language models to follow instructions with human feedback' use to measure instruction following?",
+    "expected_doc_id": 14,
+    "relevant_doc_ids": [14],
+    "paper": "Training language models to follow instructions with human feedback",
+    "focus": "experimental_setup"
+  },
+  {
+    "query": "What are the key results reported in 'Training language models to follow instructions with human feedback'?",
+    "expected_doc_id": 14,
+    "relevant_doc_ids": [14],
+    "paper": "Training language models to follow instructions with human feedback",
+    "focus": "quantitative_results"
+  },
+  {
+    "query": "How does InstructGPT compare to GPT-3 in terms of human preference and helpfulness?",
+    "expected_doc_id": 14,
+    "relevant_doc_ids": [14],
+    "paper": "Training language models to follow instructions with human feedback",
+    "focus": "baseline_comparisons"
+  },
+  {
+    "query": "What safety and alignment limitations are acknowledged in 'Training language models to follow instructions with human feedback'?",
+    "expected_doc_id": 14,
+    "relevant_doc_ids": [14],
+    "paper": "Training language models to follow instructions with human feedback",
+    "focus": "limitations"
+  },
+  {
+    "query": "How are human labelers recruited and quality-controlled in 'Training language models to follow instructions with human feedback'?",
+    "expected_doc_id": 14,
+    "relevant_doc_ids": [14],
+    "paper": "Training language models to follow instructions with human feedback",
+    "focus": "methodology"
+  },
+  {
+    "query": "What challenge in evaluating conversational AI does 'Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena' address?",
+    "expected_doc_id": 15,
+    "relevant_doc_ids": [15],
+    "paper": "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena",
+    "focus": "research_problem"
+  },
+  {
+    "query": "What is the LLM-as-judge framework introduced in 'Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena'?",
+    "expected_doc_id": 15,
+    "relevant_doc_ids": [15],
+    "paper": "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena",
+    "focus": "main_contributions"
+  },
+  {
+    "query": "How does the MT-Bench evaluation protocol work in 'Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena'?",
+    "expected_doc_id": 15,
+    "relevant_doc_ids": [15],
+    "paper": "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena",
+    "focus": "methodology"
+  },
+  {
+    "query": "What models and task categories are covered in 'Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena'?",
+    "expected_doc_id": 15,
+    "relevant_doc_ids": [15],
+    "paper": "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena",
+    "focus": "datasets_or_benchmarks"
+  },
+  {
+    "query": "What are the quantitative findings about LLM judge agreement with human evaluators in 'Judging LLM-as-a-Judge'?",
+    "expected_doc_id": 15,
+    "relevant_doc_ids": [15],
+    "paper": "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena",
+    "focus": "quantitative_results"
+  },
+  {
+    "query": "How does LLM-as-judge compare to human evaluation in terms of cost and reliability in 'Judging LLM-as-a-Judge'?",
+    "expected_doc_id": 15,
+    "relevant_doc_ids": [15],
+    "paper": "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena",
+    "focus": "baseline_comparisons"
+  },
+  {
+    "query": "What biases or limitations of LLM-as-judge are identified in 'Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena'?",
+    "expected_doc_id": 15,
+    "relevant_doc_ids": [15],
+    "paper": "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena",
+    "focus": "limitations"
+  },
+  {
+    "query": "How is position bias handled in the judge evaluation described in 'Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena'?",
+    "expected_doc_id": 15,
+    "relevant_doc_ids": [15],
+    "paper": "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena",
+    "focus": "methodology"
+  }
+]
