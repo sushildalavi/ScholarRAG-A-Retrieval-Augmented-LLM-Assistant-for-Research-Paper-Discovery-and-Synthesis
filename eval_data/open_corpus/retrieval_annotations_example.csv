@@ -1,0 +1,3 @@
+query_id,query,rank,doc_id,document_title,chunk_id,page,retrieval_score,chunk_text,relevance_label
+q1,What retrieval method does this paper propose?,1,12,Dense Retrieval for Scientific QA,101,3,0.9132,We propose a dense dual-encoder retrieval model for scientific question answering.,relevant
+q1,What retrieval method does this paper propose?,2,14,Survey of Scholarly Retrieval Systems,221,7,0.6124,Prior work compares sparse and dense retrieval for scientific search.,partially_relevant

@@ -2,8 +2,11 @@
 Tests for pure-function helpers in backend/services/embeddings.py.
 No network calls or database connections are required.
 """
+import importlib
+import os
 import unittest
 
+import backend.services.embeddings as embeddings_module
 from backend.services.embeddings import (
     _trim_or_pad,
     _prepare_text,
@@ -115,11 +118,45 @@ class ContextLengthErrorTests(unittest.TestCase):
     def test_context_length_detected(self):
         self.assertTrue(_is_context_length_error("context length exceeded"))
         self.assertTrue(_is_context_length_error("Input length exceeds maximum"))
+        self.assertTrue(_is_context_length_error("This model's maximum context length is 8192 tokens"))
+        self.assertTrue(_is_context_length_error("Too many tokens in request"))
 
     def test_other_errors_not_flagged(self):
         self.assertFalse(_is_context_length_error("connection refused"))
         self.assertFalse(_is_context_length_error("timeout"))
         self.assertFalse(_is_context_length_error(""))
+
+
+class OpenAIProviderConfigTests(unittest.TestCase):
+    def test_openai_provider_uses_openai_model_and_dimensions(self):
+        old = {key: os.environ.get(key) for key in (
+            "EMBEDDING_PROVIDER",
+            "OPENAI_EMBEDDING_MODEL",
+            "OPENAI_EMBED_DIMENSIONS",
+            "EMBEDDING_VERSION",
+            "VECTOR_STORE_DIM",
+            "EMBEDDING_RAW_DIM",
+        )}
+        try:
+            os.environ["EMBEDDING_PROVIDER"] = "openai"
+            os.environ["OPENAI_EMBEDDING_MODEL"] = "text-embedding-3-large"
+            os.environ["OPENAI_EMBED_DIMENSIONS"] = "1536"
+            os.environ.pop("EMBEDDING_VERSION", None)
+            os.environ["VECTOR_STORE_DIM"] = "1536"
+            os.environ["EMBEDDING_RAW_DIM"] = "1024"
+
+            reloaded = importlib.reload(embeddings_module)
+            self.assertEqual(reloaded.get_provider(), "openai")
+            self.assertEqual(reloaded.get_embedding_model(), "text-embedding-3-large")
+            self.assertEqual(reloaded.get_raw_embedding_dims(), 1536)
+            self.assertEqual(reloaded.get_embedding_version(), "text-embedding-3-large-1536d-v1")
+        finally:
+            for key, value in old.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            importlib.reload(embeddings_module)
 
 
 if __name__ == "__main__":

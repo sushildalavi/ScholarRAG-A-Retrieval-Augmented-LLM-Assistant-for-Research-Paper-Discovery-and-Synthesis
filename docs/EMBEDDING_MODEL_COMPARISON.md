@@ -76,10 +76,10 @@ ALTER TABLE chunk_embeddings
 Then update `.env`:
 ```env
 EMBEDDING_PROVIDER=openai
-OPENAI_EMBED_MODEL=text-embedding-3-large
-EMBEDDING_RAW_DIM=3072
+OPENAI_EMBEDDING_MODEL=text-embedding-3-large
+OPENAI_EMBED_DIMENSIONS=3072
 VECTOR_STORE_DIM=3072
-EMBEDDING_VERSION=text-embedding-3-large-v1
+EMBEDDING_VERSION=text-embedding-3-large-3072d-v1
 ```
 
 Then reindex all chunks:

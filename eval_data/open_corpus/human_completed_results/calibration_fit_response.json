@@ -1,0 +1,19 @@
+{
+  "run_id": 1,
+  "created_at": "2026-03-25T03:20:44.371767",
+  "model_name": "msa_open_corpus_human_completed",
+  "label": "open_corpus_human_completed",
+  "records_used": 634,
+  "weights": {
+    "w1": 3.552563,
+    "w2": 0.181744,
+    "w3": 4.927992,
+    "b": -2.763298
+  },
+  "metrics": {
+    "n": 634,
+    "accuracy": 1.0,
+    "brier": 0.0007,
+    "method": "gradient_logistic"
+  }
+}

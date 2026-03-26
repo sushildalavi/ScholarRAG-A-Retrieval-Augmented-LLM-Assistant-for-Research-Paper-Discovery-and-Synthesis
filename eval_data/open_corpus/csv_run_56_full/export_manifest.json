@@ -1,0 +1,15 @@
+{
+  "mode": "open_corpus_csv_export",
+  "queries_requested": 56,
+  "retrieval_exports": 56,
+  "answer_exports": 56,
+  "compute_msa": false,
+  "run_judge_llm": false,
+  "files": {
+    "query_summary": "eval_data/open_corpus/csv_run_56_full/query_summary.csv",
+    "retrieval_annotations": "eval_data/open_corpus/csv_run_56_full/retrieval_annotations.csv",
+    "claim_annotations": "eval_data/open_corpus/csv_run_56_full/claim_annotations.csv",
+    "corpus_doc_relevance": "eval_data/open_corpus/csv_run_56_full/corpus_doc_relevance.csv"
+  },
+  "errors": []
+}

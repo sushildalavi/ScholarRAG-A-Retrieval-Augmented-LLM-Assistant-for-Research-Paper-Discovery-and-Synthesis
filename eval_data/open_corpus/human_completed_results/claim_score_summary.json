@@ -1,0 +1,12 @@
+{
+  "count": 634,
+  "scored_count": 634,
+  "avg_M": 0.7248,
+  "avg_S": 0.8095,
+  "avg_A": 0.8991,
+  "avg_msa_score": 0.902,
+  "avg_supported_score": 0.9942,
+  "avg_unsupported_score": 0.081,
+  "supported_count": 570,
+  "unsupported_count": 64
+}

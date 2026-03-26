@@ -1,0 +1,2 @@
+query_id,query,generated_answer,answer_level_notes
+q1,What retrieval method does this paper propose?,The paper proposes a dense dual-encoder retrieval model for scientific QA [S1].,

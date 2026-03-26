@@ -1,0 +1,4 @@
+query_id,query,doc_id,document_title,relevance_label
+q1,What retrieval method does this paper propose?,12,Dense Retrieval for Scientific QA,relevant
+q1,What retrieval method does this paper propose?,14,Survey of Scholarly Retrieval Systems,partially_relevant
+q1,What retrieval method does this paper propose?,16,Neural Ranking for Literature Review,not_relevant

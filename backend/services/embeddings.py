@@ -14,11 +14,14 @@ import hashlib
 import json
 import os
 import time
+from functools import lru_cache
 from typing import Dict, Iterable, List
 
 import requests
+from openai import OpenAI
 
 from backend.services.db import execute, fetchall
+from utils.config import get_openai_api_key
 
 
 def _env(name: str, default: str) -> str:
@@ -29,6 +32,7 @@ def _env(name: str, default: str) -> str:
 EMBEDDING_PROVIDER = _env("EMBEDDING_PROVIDER", "ollama").lower()
 OLLAMA_BASE_URL = _env("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_EMBED_MODEL = _env("OLLAMA_EMBED_MODEL", "mxbai-embed-large")
+OPENAI_EMBEDDING_MODEL = _env("OPENAI_EMBEDDING_MODEL", _env("OPENAI_EMBED_MODEL", "text-embedding-3-large"))
 EMBEDDING_QUERY_PREFIX = _env(
     "EMBEDDING_QUERY_PREFIX",
     "Represent this sentence for searching relevant passages: ",
@@ -39,9 +43,9 @@ EMBEDDING_DOC_PREFIX = _env(
 )
 EMBEDDING_BATCH_SIZE = int(_env("EMBEDDING_BATCH_SIZE", "16") or 16)
 EMBEDDING_TIMEOUT_SECONDS = float(_env("EMBEDDING_TIMEOUT_SECONDS", _env("OLLAMA_EMBED_TIMEOUT", "30")) or 30)
+OPENAI_EMBED_TIMEOUT = float(_env("OPENAI_EMBED_TIMEOUT", str(EMBEDDING_TIMEOUT_SECONDS)) or EMBEDDING_TIMEOUT_SECONDS)
 EMBEDDING_RETRY_ATTEMPTS = int(_env("EMBEDDING_RETRY_ATTEMPTS", "3") or 3)
 EMBEDDING_RETRY_DELAY = float(_env("EMBEDDING_RETRY_DELAY", "0.5") or 0.5)
-EMBEDDING_VERSION = _env("EMBEDDING_VERSION", "mxbai-embed-large-v1")
 EMBEDDING_MAX_QUERY_WORDS = int(_env("EMBEDDING_MAX_QUERY_WORDS", "128") or 128)
 EMBEDDING_MAX_DOC_WORDS = int(_env("EMBEDDING_MAX_DOC_WORDS", "256") or 256)
 
@@ -49,6 +53,13 @@ EMBEDDING_MAX_DOC_WORDS = int(_env("EMBEDDING_MAX_DOC_WORDS", "256") or 256)
 # mxbai-embed-large is 1024-d, but some existing DB schemas still use vector(1536).
 EMBEDDING_RAW_DIM = int(_env("EMBEDDING_RAW_DIM", "1024") or 1024)
 VECTOR_STORE_DIM = int(_env("VECTOR_STORE_DIM", "1536") or 1536)
+OPENAI_EMBED_DIMENSIONS = int(_env("OPENAI_EMBED_DIMENSIONS", str(VECTOR_STORE_DIM)) or VECTOR_STORE_DIM)
+EMBEDDING_VERSION = _env(
+    "EMBEDDING_VERSION",
+    f"{OPENAI_EMBEDDING_MODEL}-{OPENAI_EMBED_DIMENSIONS}d-v1"
+    if EMBEDDING_PROVIDER == "openai"
+    else "mxbai-embed-large-v1",
+)
 
 
 def _hash_text(text: str) -> str:
@@ -131,7 +142,27 @@ def _extract_ollama_error(response: requests.Response) -> str:
 
 def _is_context_length_error(message: str) -> bool:
     msg = (message or "").lower()
-    return "context length" in msg or "input length exceeds" in msg
+    return (
+        "context length" in msg
+        or "maximum context length" in msg
+        or "input length exceeds" in msg
+        or "maximum number of tokens" in msg
+        or "too many tokens" in msg
+    )
+
+
+@lru_cache(maxsize=1)
+def _openai_client() -> OpenAI:
+    return OpenAI(api_key=get_openai_api_key())
+
+
+def _openai_dimensions_for_request() -> int | None:
+    dims = max(0, int(OPENAI_EMBED_DIMENSIONS))
+    if dims <= 0:
+        return None
+    if OPENAI_EMBEDDING_MODEL.startswith("text-embedding-3"):
+        return dims
+    return None
 
 
 def _post_ollama_embedding(text: str) -> List[float]:
@@ -173,6 +204,25 @@ def _post_ollama_embedding(text: str) -> List[float]:
     raise RuntimeError("Ollama embedding call failed without response.")
 
 
+def _post_openai_embedding(text: str) -> List[float]:
+    kwargs = {
+        "model": OPENAI_EMBEDDING_MODEL,
+        "input": text,
+        "timeout": OPENAI_EMBED_TIMEOUT,
+    }
+    dimensions = _openai_dimensions_for_request()
+    if dimensions is not None:
+        kwargs["dimensions"] = dimensions
+    response = _openai_client().embeddings.create(**kwargs)
+    data = getattr(response, "data", None) or []
+    if not data or not getattr(data[0], "embedding", None):
+        raise RuntimeError("OpenAI embedding response missing `data[0].embedding`.")
+    values = [float(v) for v in data[0].embedding]
+    if len(values) < 128:
+        raise RuntimeError(f"OpenAI embedding response too short ({len(values)} dims).")
+    return values
+
+
 def _retry(fn, *args, **kwargs):
     last_err: Exception | None = None
     for attempt in range(1, max(1, EMBEDDING_RETRY_ATTEMPTS) + 1):
@@ -189,8 +239,6 @@ def _retry(fn, *args, **kwargs):
 
 
 def _embed_single(text: str, kind: str) -> List[float]:
-    if EMBEDDING_PROVIDER != "ollama":
-        raise RuntimeError(f"Unsupported embedding provider: {EMBEDDING_PROVIDER}")
     prefix = EMBEDDING_QUERY_PREFIX if kind == "query" else EMBEDDING_DOC_PREFIX
     prepared = _prepare_text(text, kind)
     words = prepared.split()
@@ -211,7 +259,13 @@ def _embed_single(text: str, kind: str) -> List[float]:
     for limit in deduped_limits:
         attempt_text = " ".join(words[:limit]) if limit > 0 else prepared
         try:
-            raw = _retry(_post_ollama_embedding, f"{prefix}{attempt_text}")
+            input_text = f"{prefix}{attempt_text}"
+            if EMBEDDING_PROVIDER == "ollama":
+                raw = _retry(_post_ollama_embedding, input_text)
+            elif EMBEDDING_PROVIDER == "openai":
+                raw = _retry(_post_openai_embedding, input_text)
+            else:
+                raise RuntimeError(f"Unsupported embedding provider: {EMBEDDING_PROVIDER}")
             return _trim_or_pad(raw, VECTOR_STORE_DIM)
         except Exception as exc:
             last_err = exc
@@ -286,9 +340,10 @@ def healthcheck_embeddings() -> dict:
         "provider": get_provider(),
         "model": get_embedding_model(),
         "embedding_version": get_embedding_version(),
-        "raw_dim": EMBEDDING_RAW_DIM,
+        "raw_dim": get_raw_embedding_dims(),
         "vector_store_dim": VECTOR_STORE_DIM,
         "base_url": OLLAMA_BASE_URL if get_provider() == "ollama" else None,
+        "openai_dimensions": _openai_dimensions_for_request() if get_provider() == "openai" else None,
     }
     probe = embed_query("embedding healthcheck")
     diagnostics["ok"] = True
@@ -312,7 +367,7 @@ def get_provider() -> str:
 
 
 def get_embedding_model() -> str:
-    return OLLAMA_EMBED_MODEL if EMBEDDING_PROVIDER == "ollama" else _env("OPENAI_EMBEDDING_MODEL", "text-embedding-3-large")
+    return OLLAMA_EMBED_MODEL if EMBEDDING_PROVIDER == "ollama" else OPENAI_EMBEDDING_MODEL
 
 
 def get_embedding_version() -> str:
@@ -324,4 +379,6 @@ def get_embedding_dims() -> int:
 
 
 def get_raw_embedding_dims() -> int:
+    if EMBEDDING_PROVIDER == "openai":
+        return _openai_dimensions_for_request() or OPENAI_EMBED_DIMENSIONS
     return EMBEDDING_RAW_DIM

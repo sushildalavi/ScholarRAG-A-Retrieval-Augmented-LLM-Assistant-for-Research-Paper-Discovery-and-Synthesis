@@ -1,0 +1,3 @@
+query_id,query,claim_id,claim_text,evidence_ids,evidence_text,msa_M,msa_S,msa_A,support_label,citation_correct,annotator_notes
+q1,What retrieval method does this paper propose?,q1_c1,The paper proposes a dense dual-encoder retrieval model for scientific QA.,uploaded:12:101:3,We propose a dense dual-encoder retrieval model for scientific question answering.,0.91,0.66,0.74,supported,true,
+q1,What retrieval method does this paper propose?,q1_c2,It also claims large improvements on every benchmark.,uploaded:12:101:3,We observe gains on two of the three evaluation benchmarks.,0.24,0.66,0.32,unsupported,false,

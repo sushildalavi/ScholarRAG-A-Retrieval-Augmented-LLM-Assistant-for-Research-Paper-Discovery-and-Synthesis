@@ -1,0 +1,432 @@
+{
+  "mode": "open_corpus_queries",
+  "query_count": 60,
+  "blocked_query_ids": [
+    "q17",
+    "q18",
+    "q19",
+    "q20"
+  ],
+  "queries": [
+    {
+      "query_id": "q1",
+      "query": "What is the main idea introduced in Attention Is All You Need?",
+      "doc_scope": "uploaded",
+      "paper_title": "Attention Is All You Need",
+      "doc_id": 76
+    },
+    {
+      "query_id": "q2",
+      "query": "How does the Transformer avoid recurrence and convolution?",
+      "doc_scope": "uploaded",
+      "paper_title": "Attention Is All You Need",
+      "doc_id": 76
+    },
+    {
+      "query_id": "q3",
+      "query": "What is multi-head attention and why is it useful in this paper?",
+      "doc_scope": "uploaded",
+      "paper_title": "Attention Is All You Need",
+      "doc_id": 76
+    },
+    {
+      "query_id": "q4",
+      "query": "Why are positional encodings needed in the Transformer architecture?",
+      "doc_scope": "uploaded",
+      "paper_title": "Attention Is All You Need",
+      "doc_id": 76
+    },
+    {
+      "query_id": "q5",
+      "query": "What are the two main pretraining objectives used in BERT?",
+      "doc_scope": "uploaded",
+      "paper_title": "BERT",
+      "doc_id": 75
+    },
+    {
+      "query_id": "q6",
+      "query": "Why is BERT called a bidirectional language model?",
+      "doc_scope": "uploaded",
+      "paper_title": "BERT",
+      "doc_id": 75
+    },
+    {
+      "query_id": "q7",
+      "query": "How does BERT get adapted to downstream NLP tasks?",
+      "doc_scope": "uploaded",
+      "paper_title": "BERT",
+      "doc_id": 75
+    },
+    {
+      "query_id": "q8",
+      "query": "What makes BERT different from earlier left-to-right language models?",
+      "doc_scope": "uploaded",
+      "paper_title": "BERT",
+      "doc_id": 75
+    },
+    {
+      "query_id": "q9",
+      "query": "What problem is the RAG paper trying to solve?",
+      "doc_scope": "uploaded",
+      "paper_title": "Retrieval-Augmented Generation",
+      "doc_id": 74
+    },
+    {
+      "query_id": "q10",
+      "query": "How does Retrieval-Augmented Generation combine retrieval and generation?",
+      "doc_scope": "uploaded",
+      "paper_title": "Retrieval-Augmented Generation",
+      "doc_id": 74
+    },
+    {
+      "query_id": "q11",
+      "query": "Why is non-parametric memory useful in the RAG framework?",
+      "doc_scope": "uploaded",
+      "paper_title": "Retrieval-Augmented Generation",
+      "doc_id": 74
+    },
+    {
+      "query_id": "q12",
+      "query": "How does RAG differ from a standard seq2seq model without retrieval?",
+      "doc_scope": "uploaded",
+      "paper_title": "Retrieval-Augmented Generation",
+      "doc_id": 74
+    },
+    {
+      "query_id": "q13",
+      "query": "How is CLIP trained using image-text pairs?",
+      "doc_scope": "uploaded",
+      "paper_title": "CLIP",
+      "doc_id": 73
+    },
+    {
+      "query_id": "q14",
+      "query": "What does zero-shot transfer mean in the CLIP paper?",
+      "doc_scope": "uploaded",
+      "paper_title": "CLIP",
+      "doc_id": 73
+    },
+    {
+      "query_id": "q15",
+      "query": "Why does CLIP not need a fixed label set during pretraining?",
+      "doc_scope": "uploaded",
+      "paper_title": "CLIP",
+      "doc_id": 73
+    },
+    {
+      "query_id": "q16",
+      "query": "What makes CLIP useful for general-purpose vision tasks?",
+      "doc_scope": "uploaded",
+      "paper_title": "CLIP",
+      "doc_id": 73
+    },
+    {
+      "query_id": "q17",
+      "query": "What are the forward and reverse processes in diffusion models?",
+      "doc_scope": "uploaded",
+      "paper_title": "Denoising Diffusion Probabilistic Models",
+      "notes": "blocked_missing_uploaded_doc: expected DDPM paper not currently present in uploaded corpus; uploaded doc 78 is Wink: Recovering from Misbehaviors in Coding Agents"
+    },
+    {
+      "query_id": "q18",
+      "query": "How does the model generate images in the DDPM paper?",
+      "doc_scope": "uploaded",
+      "paper_title": "Denoising Diffusion Probabilistic Models",
+      "notes": "blocked_missing_uploaded_doc: expected DDPM paper not currently present in uploaded corpus; uploaded doc 78 is Wink: Recovering from Misbehaviors in Coding Agents"
+    },
+    {
+      "query_id": "q19",
+      "query": "Why is denoising central to diffusion-based generation?",
+      "doc_scope": "uploaded",
+      "paper_title": "Denoising Diffusion Probabilistic Models",
+      "notes": "blocked_missing_uploaded_doc: expected DDPM paper not currently present in uploaded corpus; uploaded doc 78 is Wink: Recovering from Misbehaviors in Coding Agents"
+    },
+    {
+      "query_id": "q20",
+      "query": "What is the training objective used in the DDPM approach?",
+      "doc_scope": "uploaded",
+      "paper_title": "Denoising Diffusion Probabilistic Models",
+      "notes": "blocked_missing_uploaded_doc: expected DDPM paper not currently present in uploaded corpus; uploaded doc 78 is Wink: Recovering from Misbehaviors in Coding Agents"
+    },
+    {
+      "query_id": "q21",
+      "query": "What problem do residual connections solve in deep neural networks?",
+      "doc_scope": "uploaded",
+      "paper_title": "ResNet",
+      "doc_id": 71
+    },
+    {
+      "query_id": "q22",
+      "query": "What is a residual block in the ResNet paper?",
+      "doc_scope": "uploaded",
+      "paper_title": "ResNet",
+      "doc_id": 71
+    },
+    {
+      "query_id": "q23",
+      "query": "Why do deeper plain networks suffer from degradation according to the paper?",
+      "doc_scope": "uploaded",
+      "paper_title": "ResNet",
+      "doc_id": 71
+    },
+    {
+      "query_id": "q24",
+      "query": "How does ResNet make optimization easier?",
+      "doc_scope": "uploaded",
+      "paper_title": "ResNet",
+      "doc_id": 71
+    },
+    {
+      "query_id": "q25",
+      "query": "Why is U-Net effective for biomedical image segmentation?",
+      "doc_scope": "uploaded",
+      "paper_title": "U-Net",
+      "doc_id": 70
+    },
+    {
+      "query_id": "q26",
+      "query": "What is the purpose of the skip connections in U-Net?",
+      "doc_scope": "uploaded",
+      "paper_title": "U-Net",
+      "doc_id": 70
+    },
+    {
+      "query_id": "q27",
+      "query": "How does the expanding path differ from the contracting path in U-Net?",
+      "doc_scope": "uploaded",
+      "paper_title": "U-Net",
+      "doc_id": 70
+    },
+    {
+      "query_id": "q28",
+      "query": "Why is U-Net especially useful when labeled data is limited?",
+      "doc_scope": "uploaded",
+      "paper_title": "U-Net",
+      "doc_id": 70
+    },
+    {
+      "query_id": "q29",
+      "query": "How does YOLOv3 perform object detection in a single-stage manner?",
+      "doc_scope": "uploaded",
+      "paper_title": "YOLOv3",
+      "doc_id": 69
+    },
+    {
+      "query_id": "q30",
+      "query": "What changes or improvements are introduced in YOLOv3 compared to earlier versions?",
+      "doc_scope": "uploaded",
+      "paper_title": "YOLOv3",
+      "doc_id": 69
+    },
+    {
+      "query_id": "q31",
+      "query": "How does YOLOv3 balance speed and detection accuracy?",
+      "doc_scope": "uploaded",
+      "paper_title": "YOLOv3",
+      "doc_id": 69
+    },
+    {
+      "query_id": "q32",
+      "query": "Why does YOLOv3 predict at multiple scales?",
+      "doc_scope": "uploaded",
+      "paper_title": "YOLOv3",
+      "doc_id": 69
+    },
+    {
+      "query_id": "q33",
+      "query": "How does the Vision Transformer convert an image into tokens?",
+      "doc_scope": "uploaded",
+      "paper_title": "Vision Transformer",
+      "doc_id": 68
+    },
+    {
+      "query_id": "q34",
+      "query": "Why does the ViT paper argue that convolutions are not strictly necessary for image classification?",
+      "doc_scope": "uploaded",
+      "paper_title": "Vision Transformer",
+      "doc_id": 68
+    },
+    {
+      "query_id": "q35",
+      "query": "What role do image patches play in Vision Transformer?",
+      "doc_scope": "uploaded",
+      "paper_title": "Vision Transformer",
+      "doc_id": 68
+    },
+    {
+      "query_id": "q36",
+      "query": "Why is large-scale pretraining important for ViT performance?",
+      "doc_scope": "uploaded",
+      "paper_title": "Vision Transformer",
+      "doc_id": 68
+    },
+    {
+      "query_id": "q37",
+      "query": "How does DQN learn to play Atari games directly from pixels?",
+      "doc_scope": "uploaded",
+      "paper_title": "Playing Atari with Deep Reinforcement Learning",
+      "doc_id": 67
+    },
+    {
+      "query_id": "q38",
+      "query": "What role does Q-learning play in the DQN paper?",
+      "doc_scope": "uploaded",
+      "paper_title": "Playing Atari with Deep Reinforcement Learning",
+      "doc_id": 67
+    },
+    {
+      "query_id": "q39",
+      "query": "Why was this paper important for deep reinforcement learning?",
+      "doc_scope": "uploaded",
+      "paper_title": "Playing Atari with Deep Reinforcement Learning",
+      "doc_id": 67
+    },
+    {
+      "query_id": "q40",
+      "query": "What kind of input representation is used for the Atari agent?",
+      "doc_scope": "uploaded",
+      "paper_title": "Playing Atari with Deep Reinforcement Learning",
+      "doc_id": 67
+    },
+    {
+      "query_id": "q41",
+      "query": "How does the GCN paper define convolution on graph-structured data?",
+      "doc_scope": "uploaded",
+      "paper_title": "Graph Convolutional Networks",
+      "doc_id": 66
+    },
+    {
+      "query_id": "q42",
+      "query": "Why is the method in the GCN paper considered semi-supervised?",
+      "doc_scope": "uploaded",
+      "paper_title": "Graph Convolutional Networks",
+      "doc_id": 66
+    },
+    {
+      "query_id": "q43",
+      "query": "How does neighborhood information influence node representations in GCNs?",
+      "doc_scope": "uploaded",
+      "paper_title": "Graph Convolutional Networks",
+      "doc_id": 66
+    },
+    {
+      "query_id": "q44",
+      "query": "What problem is the GCN paper mainly trying to solve?",
+      "doc_scope": "uploaded",
+      "paper_title": "Graph Convolutional Networks",
+      "doc_id": 66
+    },
+    {
+      "query_id": "q45",
+      "query": "How does Neural Collaborative Filtering differ from traditional matrix factorization?",
+      "doc_scope": "uploaded",
+      "paper_title": "Neural Collaborative Filtering",
+      "doc_id": 65
+    },
+    {
+      "query_id": "q46",
+      "query": "How are nonlinear user-item interactions modeled in this paper?",
+      "doc_scope": "uploaded",
+      "paper_title": "Neural Collaborative Filtering",
+      "doc_id": 65
+    },
+    {
+      "query_id": "q47",
+      "query": "What type of recommendation setting does the paper focus on?",
+      "doc_scope": "uploaded",
+      "paper_title": "Neural Collaborative Filtering",
+      "doc_id": 65
+    },
+    {
+      "query_id": "q48",
+      "query": "Why is neural modeling useful for collaborative filtering according to the paper?",
+      "doc_scope": "uploaded",
+      "paper_title": "Neural Collaborative Filtering",
+      "doc_id": 65
+    },
+    {
+      "query_id": "q49",
+      "query": "How does wav2vec 2.0 learn speech representations from unlabeled audio?",
+      "doc_scope": "uploaded",
+      "paper_title": "wav2vec 2.0",
+      "doc_id": 64
+    },
+    {
+      "query_id": "q50",
+      "query": "What gets masked during wav2vec 2.0 pretraining?",
+      "doc_scope": "uploaded",
+      "paper_title": "wav2vec 2.0",
+      "doc_id": 64
+    },
+    {
+      "query_id": "q51",
+      "query": "Why is self-supervised learning useful in the wav2vec 2.0 framework?",
+      "doc_scope": "uploaded",
+      "paper_title": "wav2vec 2.0",
+      "doc_id": 64
+    },
+    {
+      "query_id": "q52",
+      "query": "How is the pretrained wav2vec 2.0 model adapted for speech recognition?",
+      "doc_scope": "uploaded",
+      "paper_title": "wav2vec 2.0",
+      "doc_id": 64
+    },
+    {
+      "query_id": "q53",
+      "query": "What is the main idea behind Autoformer for time-series forecasting?",
+      "doc_scope": "uploaded",
+      "paper_title": "Autoformer",
+      "doc_id": 63
+    },
+    {
+      "query_id": "q54",
+      "query": "What is the Auto-Correlation mechanism in Autoformer?",
+      "doc_scope": "uploaded",
+      "paper_title": "Autoformer",
+      "doc_id": 63
+    },
+    {
+      "query_id": "q55",
+      "query": "Why does Autoformer use decomposition in forecasting?",
+      "doc_scope": "uploaded",
+      "paper_title": "Autoformer",
+      "doc_id": 63
+    },
+    {
+      "query_id": "q56",
+      "query": "What challenge in long-term forecasting is Autoformer trying to address?",
+      "doc_scope": "uploaded",
+      "paper_title": "Autoformer",
+      "doc_id": 63
+    },
+    {
+      "query_id": "q57",
+      "query": "How do the generator and discriminator interact in GAN training?",
+      "doc_scope": "uploaded",
+      "paper_title": "Generative Adversarial Nets",
+      "doc_id": 62
+    },
+    {
+      "query_id": "q58",
+      "query": "What minimax objective is introduced in the original GAN paper?",
+      "doc_scope": "uploaded",
+      "paper_title": "Generative Adversarial Nets",
+      "doc_id": 62
+    },
+    {
+      "query_id": "q59",
+      "query": "Why can GAN training be unstable?",
+      "doc_scope": "uploaded",
+      "paper_title": "Generative Adversarial Nets",
+      "doc_id": 62
+    },
+    {
+      "query_id": "q60",
+      "query": "What is the key idea that makes adversarial learning effective for generation?",
+      "doc_scope": "uploaded",
+      "paper_title": "Generative Adversarial Nets",
+      "doc_id": 62
+    }
+  ]
+}

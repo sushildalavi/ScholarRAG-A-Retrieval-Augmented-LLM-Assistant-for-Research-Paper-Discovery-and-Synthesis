@@ -1,0 +1,17 @@
+{
+  "mode": "open_corpus_queries",
+  "queries": [
+    {
+      "query_id": "q1",
+      "query": "What retrieval method does this paper propose?",
+      "doc_scope": "uploaded",
+      "doc_id": 12
+    },
+    {
+      "query_id": "q2",
+      "query": "Compare the methods proposed in these selected papers.",
+      "doc_scope": "uploaded",
+      "doc_ids": [12, 14]
+    }
+  ]
+}

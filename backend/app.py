@@ -7,6 +7,7 @@ import numpy as np
 import os
 import time
 import re
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,7 @@ from backend.services.assistant_utils import (
     _is_entity_level_query,
     _is_explicit_uploaded_summary_request,
     _is_general_knowledge_query,
+    _is_uploaded_key_concepts_query,
     _is_related_work_query,
     _is_uploaded_doc_summary_query,
     _load_latest_calibration_weights,
@@ -84,6 +86,7 @@ import statistics
 
 # Initialize FastAPI app
 app = FastAPI(title="ScholarRAG: Scholarly Retrieval-Augmented Generation System", version="1.0")
+logger = logging.getLogger(__name__)
 
 _cors_env = os.environ.get("CORS_ORIGINS", "")
 _cors_origins = (
@@ -177,9 +180,18 @@ def _ensure_msa_schema() -> None:
         """
     )
 
+def _initialize_database_schema() -> None:
+    pdf_ingest._ensure_doc_type_schema()
+    _ensure_eval_schema()
+    _ensure_msa_schema()
 
-_ensure_eval_schema()
-_ensure_msa_schema()
+
+@app.on_event("startup")
+def _startup_initialize_database_schema() -> None:
+    try:
+        _initialize_database_schema()
+    except Exception as exc:
+        logger.warning("Database schema initialization skipped: %s", exc)
 
 
 def _chat_answer(query: str) -> str:
@@ -464,7 +476,7 @@ def assistant_answer(
                         "snippet": r.get("text", ""),
                     }
                 )
-            local_citations = _prune_uploaded_citations(q, local_citations)
+            local_citations = _prune_uploaded_citations(q, local_citations, doc_ids=doc_ids)
         elif mode == "public":
             nonlocal public_provider_status
             public_resp = public_live_search(q, k=min(k, 8), source_only=requested_public_source, return_metadata=True)
@@ -735,7 +747,13 @@ def assistant_answer(
     prefer_public = scope == "uploaded" and allow_general_background and (
         _is_general_knowledge_query(query) or _is_company_intent_query(query)
     )
-    citations = _rank_and_trim_citations(query, citations, k, prefer_public=prefer_public)
+    citations = _rank_and_trim_citations(
+        query,
+        citations,
+        k,
+        prefer_public=prefer_public,
+        doc_ids=doc_ids if scope == "uploaded" else None,
+    )
     if prefer_public:
         public_only = [c for c in citations if (c.get("source") or "").lower() != "uploaded"]
         if public_only:
@@ -756,6 +774,7 @@ def assistant_answer(
                 public_citations + citations,
                 k,
                 prefer_public=prefer_public,
+                doc_ids=doc_ids if scope == "uploaded" else None,
             )
     rerank_ms = (time.perf_counter() - rerank_start) * 1000
 
@@ -884,6 +903,19 @@ def assistant_answer(
             "10) Compare senses mode is enabled. If multiple senses exist, write separate sections for each sense "
             f"from these options: {', '.join(sense.get('options', []))}. "
             "Do not merge senses in the same paragraph.\n"
+        )
+    if scope == "uploaded" and _is_uploaded_key_concepts_query(query):
+        compare_instruction += (
+            "11) This is a key-concepts extraction request over uploaded documents. Organize the answer by document "
+            "using `##` headings. Under each document, extract only evidence-backed bullets for: core skills/topics, "
+            "standout projects or claims, and tools/technologies if explicitly present. "
+            "If multiple documents are selected, end with `## Shared themes` and `## Distinctive differences`.\n"
+        )
+    if scope == "uploaded" and doc_ids and len(doc_ids) > 1:
+        compare_instruction += (
+            "12) Multiple uploaded documents are selected. Synthesize across the selected documents and call out "
+            "document-specific differences when the evidence supports them. Do not answer from only one document "
+            "if multiple selected documents contain relevant evidence.\n"
         )
 
     prompt = _build_generation_prompt(
@@ -1036,7 +1068,7 @@ def assistant_answer(
         citations = _rebalance_uploaded_multi_doc_citations(citations, doc_ids, k)
         for i, c in enumerate(citations, start=1):
             c["id"] = i
-        if _is_uploaded_doc_summary_query(query):
+        if _is_uploaded_doc_summary_query(query) and (critically_uncited or not answer.strip()):
             answer = _build_multi_doc_uploaded_summary(citations, doc_ids)
             citations = _apply_usage_boost(citations, answer)
             citation_coverage_par, unsupported_claims, paragraph_count = _citation_coverage_stats(answer)
@@ -1309,7 +1341,7 @@ def _eval_candidates_for_query(
         )
 
     t_rerank = time.perf_counter()
-    reranked = _rank_and_trim_citations(query, retrieval_only, k=max(10, k))
+    reranked = _rank_and_trim_citations(query, retrieval_only, k=max(10, k), doc_ids=doc_ids)
     rerank_ms = (time.perf_counter() - t_rerank) * 1000
     for i, c in enumerate(reranked, start=1):
         c["rank_after"] = i

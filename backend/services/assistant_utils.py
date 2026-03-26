@@ -294,8 +294,32 @@ def _is_uploaded_doc_summary_query(query: str) -> bool:
         "summarize this resume",
         "what skills are listed in this resume",
         "summarize this document",
+        "summarize the selected uploaded document",
+        "summarize the selected uploaded documents",
+        "extract the key skills",
+        "key skills, technical topics",
+        "standout projects or claims",
     )
     return any(c in q for c in cues)
+
+
+def _is_uploaded_key_concepts_query(query: str) -> bool:
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    markers = (
+        "extract the key skills",
+        "key skills",
+        "key concepts",
+        "technical topics",
+        "main points",
+        "standout projects",
+        "standout claims",
+        "skills or topics",
+        "shared themes",
+        "distinctive differences",
+    )
+    return any(marker in q for marker in markers)
 
 
 def _build_uploaded_evidence_fallback(query: str, citations: list[dict]) -> str:
@@ -380,6 +404,51 @@ def _rebalance_uploaded_multi_doc_citations(citations: list[dict], doc_ids: list
     return balanced or citations
 
 
+def _citation_key(citation: dict) -> tuple:
+    return (
+        citation.get("source"),
+        citation.get("doc_id"),
+        citation.get("chunk_id"),
+        citation.get("title"),
+        citation.get("page"),
+    )
+
+
+def _preserve_uploaded_doc_coverage(
+    kept: list[dict],
+    ranked: list[dict],
+    doc_ids: list[int] | None,
+) -> list[dict]:
+    if not doc_ids or len(doc_ids) <= 1:
+        return kept
+
+    selected: list[dict] = []
+    seen: set[tuple] = set()
+
+    def add(citation: dict) -> None:
+        key = _citation_key(citation)
+        if key in seen:
+            return
+        seen.add(key)
+        selected.append(citation)
+
+    # Seed the shortlist with the best uploaded hit from every selected doc.
+    for did in doc_ids:
+        for candidate in ranked:
+            source = (candidate.get("source") or "uploaded").lower()
+            candidate_doc_id = candidate.get("doc_id")
+            if source != "uploaded" or candidate_doc_id is None:
+                continue
+            if int(candidate_doc_id) == int(did):
+                add(candidate)
+                break
+
+    for citation in kept:
+        add(citation)
+
+    return selected or kept
+
+
 def _build_multi_doc_uploaded_summary(citations: list[dict], doc_ids: list[int] | None) -> str:
     if not citations or not doc_ids or len(doc_ids) <= 1:
         return _build_uploaded_evidence_fallback("summary", citations)
@@ -451,6 +520,8 @@ def _is_explicit_uploaded_summary_request(query: str) -> bool:
         "combined takeaways",
         "extract the key skills",
         "extract the key skills, topics, or main points from each selected uploaded document",
+        "extract the key skills, technical topics, standout projects or claims from the selected uploaded document",
+        "for each selected uploaded document, extract the key skills, technical topics, standout projects or claims",
         "what evidence best supports the main claims in each selected uploaded document",
     ]
     return any(marker in q for marker in markers)
@@ -626,8 +697,10 @@ def _chunk_query_overlap(query: str, citation: dict) -> float:
     return len(q & s) / max(1, len(q))
 
 
-def _prune_uploaded_citations(query: str, citations: list[dict]) -> list[dict]:
+def _prune_uploaded_citations(query: str, citations: list[dict], doc_ids: list[int] | None = None) -> list[dict]:
     if len(citations) <= 2:
+        return citations
+    if doc_ids and len(doc_ids) > 1:
         return citations
 
     scored = []
@@ -984,7 +1057,13 @@ def _scope_limited_answer(query: str, citations: list[dict]) -> str:
     )
 
 
-def _rank_and_trim_citations(query: str, citations: list[dict], k: int, prefer_public: bool = False) -> list[dict]:
+def _rank_and_trim_citations(
+    query: str,
+    citations: list[dict],
+    k: int,
+    prefer_public: bool = False,
+    doc_ids: list[int] | None = None,
+) -> list[dict]:
     if not citations:
         return citations
     ranked = []
@@ -1037,6 +1116,22 @@ def _rank_and_trim_citations(query: str, citations: list[dict], k: int, prefer_p
             public_candidates = [c for c in ranked if (c.get("source") or "").lower() != "uploaded"]
             if public_candidates:
                 kept = [public_candidates[0]] + kept[:-1]
+
+    if doc_ids and len(doc_ids) > 1:
+        target_k = max(1, int(k))
+        kept = _preserve_uploaded_doc_coverage(kept, ranked, doc_ids)
+        kept = _rebalance_uploaded_multi_doc_citations(kept, doc_ids, k=target_k)
+        if len(kept) < target_k:
+            seen = {_citation_key(c) for c in kept}
+            for candidate in ranked:
+                key = _citation_key(candidate)
+                if key in seen:
+                    continue
+                kept.append(candidate)
+                seen.add(key)
+                if len(kept) >= target_k:
+                    break
+        kept = kept[:target_k]
 
     for c in kept:
         c.pop("_rel", None)

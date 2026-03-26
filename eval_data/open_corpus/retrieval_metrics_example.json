@@ -1,0 +1,62 @@
+{
+  "mode": "open_corpus_retrieval_metrics",
+  "created_at": "2026-03-24T00:00:00+00:00",
+  "source_file": "eval_data/open_corpus/retrieval_annotations_example.json",
+  "summary": {
+    "Recall@1": 0.5,
+    "Recall@3": 1.0,
+    "Recall@5": 1.0,
+    "Recall@10": 1.0,
+    "MRR": 1.0,
+    "nDCG@10": 1.0
+  },
+  "count": 1,
+  "label_mapping": {
+    "binary_relevant": [
+      "relevant",
+      "partially_relevant"
+    ],
+    "binary_not_relevant": [
+      "not_relevant"
+    ],
+    "ndcg_gain": {
+      "relevant": 2.0,
+      "partially_relevant": 1.0,
+      "not_relevant": 0.0
+    }
+  },
+  "recall_at": {
+    "1": 0.5,
+    "3": 1.0,
+    "5": 1.0,
+    "10": 1.0
+  },
+  "mrr": 1.0,
+  "ndcg_at": {
+    "10": 1.0
+  },
+  "per_query": [
+    {
+      "query_id": "q1",
+      "query": "What retrieval method does this paper propose?",
+      "pred_doc_ids": [
+        12,
+        14
+      ],
+      "gold_doc_ids": [
+        12,
+        14
+      ],
+      "recall_at": {
+        "1": 0.5,
+        "3": 1.0,
+        "5": 1.0,
+        "10": 1.0
+      },
+      "mrr": 1.0,
+      "ndcg_at": {
+        "10": 1.0
+      }
+    }
+  ]
+}

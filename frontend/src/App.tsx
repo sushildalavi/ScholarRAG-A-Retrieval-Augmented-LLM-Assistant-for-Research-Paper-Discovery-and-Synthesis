@@ -60,6 +60,20 @@ type EvidenceState = {
   trace: WhyTraceChunk[];
 };
 
+function sourceDedupKey(citation: Pick<Citation, 'doc_id' | 'source' | 'url' | 'title'>): string {
+  return citation.doc_id
+    ? `uploaded|${citation.doc_id}`
+    : `${citation.source || ''}|${citation.url || ''}|${citation.title || ''}`;
+}
+
+function uniqueSourceCount(citations?: Citation[]): number {
+  const keys = new Set<string>();
+  for (const citation of citations || []) {
+    keys.add(sourceDedupKey(citation));
+  }
+  return keys.size;
+}
+
 type StudioSession = {
   id: string;
   title: string;
@@ -386,9 +400,7 @@ function EvidencePanel({
     });
     const deduped = new Map<string, SourceRow>();
     for (const row of mapped) {
-      const key = row.doc_id
-        ? `uploaded|${row.doc_id}`
-        : `${row.source || ''}|${row.url || ''}|${row.title || ''}`;
+      const key = sourceDedupKey(row);
       const existing = deduped.get(key);
       if (!existing) {
         deduped.set(key, {
@@ -1292,7 +1304,7 @@ function StudioPage({
     const lines: string[] = [`# ${title}\n\n*Exported from ScholarRAG — ${new Date().toLocaleDateString()}*\n\n---\n`];
     messages.forEach((m) => {
       if (m.role === 'you') lines.push(`**You:** ${m.text}\n`);
-      else lines.push(`**ScholarRAG:** ${m.text}${m.citations?.length ? `\n\n*${m.citations.length} source(s) cited*` : ''}\n`);
+      else lines.push(`**ScholarRAG:** ${m.text}${uniqueSourceCount(m.citations) ? `\n\n*${uniqueSourceCount(m.citations)} source(s) cited*` : ''}\n`);
       lines.push('');
     });
     const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
@@ -1333,10 +1345,10 @@ function StudioPage({
         {
           eyebrow: 'Key points',
           title: 'Extract key concepts',
-          text: 'Highlight the most important skills, topics, and claims.',
+          text: 'Pull out the strongest skills, topics, projects, and cross-document themes.',
           prompt: hasMulti
-            ? 'Extract key skills, topics, and main points from each selected document.'
-            : 'What are the key skills or topics in this document?',
+            ? 'For each selected uploaded document, extract the key skills, technical topics, standout projects or claims, and then finish with shared themes and distinctive differences across the documents.'
+            : 'Extract the key skills, technical topics, standout projects or claims from the selected uploaded document.',
         },
         {
           eyebrow: 'Evidence',
@@ -1798,8 +1810,10 @@ function StudioPage({
                     <div className="msg-meta">
                       <div className="assistant-card-head">
                         <span className="assistant-card-label">{formatAnswerScope(m.answer_scope) || 'Answer'}</span>
-                        {m.citations?.length ? (
-                          <span className="assistant-card-count">{m.citations.length} source{m.citations.length > 1 ? 's' : ''}</span>
+                        {uniqueSourceCount(m.citations) ? (
+                          <span className="assistant-card-count">
+                            {uniqueSourceCount(m.citations)} source{uniqueSourceCount(m.citations) > 1 ? 's' : ''}
+                          </span>
                         ) : null}
                       </div>
                       <ConfBadge confidence={m.confidence} />
@@ -1838,9 +1852,24 @@ function StudioPage({
           {messages.length > 0 && !loading && activeDoc && (
             <div className="quick-actions">
               {[
-                { label: '📋 Summarize', prompt: hasMulti ? 'Summarize the selected uploaded documents.' : 'Summarize the selected uploaded document.' },
-                { label: '🔑 Key points', prompt: 'What are the key points and main contributions?' },
-                { label: '🔍 Evidence', prompt: 'What evidence best supports the main claims?' },
+                {
+                  label: '📋 Summarize',
+                  prompt: hasMulti
+                    ? 'Summarize the selected uploaded documents. Give a short section for each document and then a combined takeaway.'
+                    : 'Summarize the selected uploaded document.',
+                },
+                {
+                  label: '🔑 Key points',
+                  prompt: hasMulti
+                    ? 'For each selected uploaded document, extract the key skills, technical topics, standout projects or claims, and one short cross-document comparison at the end.'
+                    : 'Extract the key skills, technical topics, standout projects or claims from the selected uploaded document.',
+                },
+                {
+                  label: '🔍 Evidence',
+                  prompt: hasMulti
+                    ? 'What evidence best supports the main claims in each selected uploaded document? Organize the answer by document.'
+                    : 'What evidence best supports the main claims in the selected uploaded document?',
+                },
               ].map((c) => (
                 <button key={c.label} className="quick-chip" onClick={() => quickAsk(c.prompt)}>
                   {c.label}

@@ -1,0 +1,14 @@
+{
+  "supported": {
+    "count": 570,
+    "avg_M": 0.7988,
+    "avg_S": 0.8418,
+    "avg_A": 1.0
+  },
+  "unsupported": {
+    "count": 64,
+    "avg_M": 0.0655,
+    "avg_S": 0.5219,
+    "avg_A": 0.0
+  }
+}

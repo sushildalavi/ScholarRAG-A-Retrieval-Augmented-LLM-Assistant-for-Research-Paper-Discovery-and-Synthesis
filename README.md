@@ -341,13 +341,25 @@ Or run directly:
 uvicorn backend.app:app --host 0.0.0.0 --port 8000 --workers 4
 ```
 
+For Railway or any backend host that cannot reach a local Ollama daemon, switch embeddings to OpenAI instead of leaving `OLLAMA_BASE_URL=http://127.0.0.1:11434`:
+
+```env
+EMBEDDING_PROVIDER=openai
+OPENAI_EMBEDDING_MODEL=text-embedding-3-large
+OPENAI_EMBED_DIMENSIONS=1536
+EMBEDDING_VERSION=text-embedding-3-large-1536d-v1
+```
+
 ### Environment Variables
 
 | Variable | Description |
 |----------|-------------|
+| `EMBEDDING_PROVIDER` | `ollama` for local/remote Ollama, `openai` for hosted deployments without Ollama |
 | `OPENAI_API_KEY` | OpenAI key for generation and judging |
 | `RESEARCH_CHAT_MODEL` | Model name (default: `gpt-4o-mini`) |
 | `OLLAMA_BASE_URL` | Ollama host URL |
+| `OPENAI_EMBEDDING_MODEL` | OpenAI embedding model when `EMBEDDING_PROVIDER=openai` |
+| `OPENAI_EMBED_DIMENSIONS` | Requested embedding dimensions for OpenAI embeddings |
 | `OLLAMA_EMBED_MODEL` | Embedding model (default: `mxbai-embed-large`) |
 | `EMBEDDING_VERSION` | Tracks schema compatibility (e.g. `mxbai-embed-large-v1`) |
 | `EMBEDDING_RAW_DIM` | Raw output dimension (1024 for mxbai) |

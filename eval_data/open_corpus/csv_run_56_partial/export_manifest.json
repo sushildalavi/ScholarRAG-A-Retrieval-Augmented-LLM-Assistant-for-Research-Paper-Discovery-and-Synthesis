@@ -1,0 +1,9 @@
+{
+  "mode": "open_corpus_partial_csv_export",
+  "queries": 56,
+  "files": {
+    "retrieval_annotations": "eval_data/open_corpus/csv_run_56_partial/retrieval_annotations.csv",
+    "corpus_doc_relevance": "eval_data/open_corpus/csv_run_56_partial/corpus_doc_relevance.csv"
+  },
+  "note": "answer generation blocked pending OpenAI chat completion availability and DDPM upload is missing for q17-q20"
+}

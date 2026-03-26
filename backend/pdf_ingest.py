@@ -4,6 +4,7 @@ import os
 import re
 import time
 import math
+import logging
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -23,6 +24,7 @@ from backend.services.embeddings import (
 )
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+logger = logging.getLogger(__name__)
 
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "storage"))
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -51,10 +53,6 @@ def _ensure_doc_type_schema() -> None:
           )
         """
     )
-
-
-_ensure_doc_type_schema()
-
 
 def _hash_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()

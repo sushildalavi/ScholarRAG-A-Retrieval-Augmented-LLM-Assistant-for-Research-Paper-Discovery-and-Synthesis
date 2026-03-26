@@ -1,0 +1,41 @@
+{
+  "mode": "open_corpus_claim_annotations",
+  "created_at": "2026-03-24T00:00:00+00:00",
+  "queries": [
+    {
+      "query_id": "q1",
+      "query": "What retrieval method does this paper propose?",
+      "answer": "The paper proposes a dense dual-encoder retrieval model for scientific QA [S1]. It also claims large improvements on every benchmark [S1].",
+      "claims": [
+        {
+          "claim_id": "q1_c1",
+          "text": "The paper proposes a dense dual-encoder retrieval model for scientific QA.",
+          "citation_ids": ["S1"],
+          "evidence_ids": ["uploaded:12:101:3"],
+          "evidence_text": "We propose a dense dual-encoder retrieval model for scientific question answering.",
+          "label": "supported",
+          "citation_correct": true,
+          "msa": {
+            "M": 0.91,
+            "S": 0.66,
+            "A": 0.74
+          }
+        },
+        {
+          "claim_id": "q1_c2",
+          "text": "It also claims large improvements on every benchmark.",
+          "citation_ids": ["S1"],
+          "evidence_ids": ["uploaded:12:101:3"],
+          "evidence_text": "We observe gains on two of the three evaluation benchmarks.",
+          "label": "unsupported",
+          "citation_correct": false,
+          "msa": {
+            "M": 0.24,
+            "S": 0.66,
+            "A": 0.32
+          }
+        }
+      ]
+    }
+  ]
+}
